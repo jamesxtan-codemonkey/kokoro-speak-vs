@@ -26,12 +26,14 @@
     "build:webview": "esbuild webview/main.ts --bundle --platform=browser --format=esm --outfile=media/main.js",
     "typecheck": "tsc --noEmit",
     "build": "npm run build:ext && npm run build:webview",
-    "watch": "npm run build -- --watch"
+    "watch": "npm run build -- --watch",
+    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
     "kokoro-js": "^1.2.0"
   },
   "devDependencies": {
+    "@huggingface/transformers": "3.8.1",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "esbuild": "^0.23.0",
