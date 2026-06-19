@@ -30,7 +30,9 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 ## Features
 
 - **Speak Selection** (`Cmd/Ctrl+Alt+S`; empty selection → whole document),
-  **Speak Document**, **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
+  **Speak Document**, **Speak Clipboard** (`Cmd/Ctrl+Alt+V` — works from any
+  webview panel such as the Claude Code panel or Markdown preview: copy, then
+  press it), **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
   (`Cmd/Ctrl+Alt+X`), right-click **Speak Selection**, and a status-bar item that
   shows state (Loading / Synthesizing selection… / Speaking / Paused). The
   status item **left-clicks to stop**; its hover tooltip has a **Pause/Resume**

@@ -70,6 +70,17 @@ export function activate(context: vscode.ExtensionContext) {
       if (!src) return noSource();
       speak(getSpeakableText(src.document.languageId, src.text), "document");
     }),
+    vscode.commands.registerCommand("kokoroSpeak.speakClipboard", async () => {
+      // Works from anywhere — including webview panels (Claude Code, Markdown
+      // preview) whose text the extension can't read directly. Copy, then run
+      // this. Clipboard text is usually Markdown, so strip it for speech.
+      const clip = await vscode.env.clipboard.readText();
+      if (!clip.trim()) {
+        vscode.window.showInformationMessage("Kokoro Speak: clipboard is empty.");
+        return;
+      }
+      speak(getSpeakableText("markdown", clip), "clipboard");
+    }),
     vscode.commands.registerCommand("kokoroSpeak.pause", () => {
       if (!player?.isActive) return;
       const s = player.togglePause();

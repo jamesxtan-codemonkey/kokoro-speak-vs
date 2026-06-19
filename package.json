@@ -30,6 +30,11 @@
         "category": "Kokoro Speak"
       },
       {
+        "command": "kokoroSpeak.speakClipboard",
+        "title": "Kokoro Speak: Speak Clipboard",
+        "category": "Kokoro Speak"
+      },
+      {
         "command": "kokoroSpeak.pause",
         "title": "Kokoro Speak: Pause / Resume",
         "category": "Kokoro Speak"
@@ -165,6 +170,11 @@
         "command": "kokoroSpeak.stop",
         "key": "ctrl+alt+x",
         "mac": "cmd+alt+x"
+      },
+      {
+        "command": "kokoroSpeak.speakClipboard",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v"
       }
     ],
     "menus": {
