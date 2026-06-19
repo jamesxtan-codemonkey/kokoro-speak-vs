@@ -1,6 +1,7 @@
-// M2 webview: load Kokoro (WASM), synthesize text from the host, and play it
-// with pause/resume/stop. Reports playback state back to the host so the status
-// bar stays in sync. Inference in the webview, host orchestrates.
+// Webview = synthesis worker. It loads Kokoro (WASM) and turns text into a WAV,
+// then hands the bytes to the extension host, which plays them through the OS
+// audio player. No audio plays here — that avoids the webview autoplay-gesture
+// restriction entirely.
 
 import { KokoroTTS } from "kokoro-js";
 import { env } from "@huggingface/transformers";
@@ -8,10 +9,8 @@ import { env } from "@huggingface/transformers";
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
 
-// Serve the ONNX-Runtime-Web wasm/loader from the extension (set by the host on
-// <body data-ort-base>), not the jsdelivr CDN the webview CSP blocks. Single
-// thread: webviews aren't cross-origin isolated, so SharedArrayBuffer/worker
-// threading is unavailable anyway.
+// Local ONNX-Runtime-Web (set by host on <body data-ort-base>), single-threaded
+// (webviews aren't cross-origin isolated).
 const ortWasm = env.backends?.onnx?.wasm;
 if (ortWasm) {
   const ortBase = document.body.dataset.ortBase;
@@ -21,38 +20,10 @@ if (ortWasm) {
 
 const stateEl = document.getElementById("state")!;
 const logEl = document.getElementById("log")!;
-const hintEl = document.getElementById("hint")!;
-const playBtn = document.getElementById("play") as HTMLButtonElement;
-const pauseBtn = document.getElementById("pause") as HTMLButtonElement;
-const stopBtn = document.getElementById("stop") as HTMLButtonElement;
 
-type State =
-  | "idle"
-  | "loading"
-  | "synthesizing"
-  | "speaking"
-  | "paused"
-  | "blocked"
-  | "done"
-  | "error";
-
-function setState(state: State, detail?: string) {
+function status(state: string, detail?: string) {
   stateEl.textContent = detail ?? state;
-  // Play is offered when audio is queued but blocked, or paused.
-  playBtn.disabled = !(state === "blocked" || state === "paused");
-  pauseBtn.disabled = !(state === "speaking" || state === "paused");
-  pauseBtn.textContent = state === "paused" ? "Resume" : "Pause";
-  stopBtn.disabled = !(
-    state === "speaking" ||
-    state === "paused" ||
-    state === "blocked" ||
-    state === "synthesizing"
-  );
-  hintEl.textContent =
-    state === "blocked"
-      ? "VS Code blocks audio until you click in this panel. Click Play once — after that, Speak plays automatically."
-      : "";
-  vscode.postMessage({ type: "state", state, detail });
+  vscode.postMessage({ type: "status", state, detail });
 }
 function log(line: string) {
   logEl.textContent += line + "\n";
@@ -63,21 +34,18 @@ const DTYPE = "q8";
 const VOICE = "af_heart";
 
 let ttsPromise: Promise<KokoroTTS> | undefined;
-let current: HTMLAudioElement | undefined;
-// Audio synthesized and ready, but waiting for a user gesture to start.
-let pending: HTMLAudioElement | undefined;
-// Monotonic token so a stale synthesis can't start playing after Stop/replace.
+// Monotonic token so a cancelled/superseded synthesis is dropped, not sent.
 let generation = 0;
 
 function loadModel(): Promise<KokoroTTS> {
   if (!ttsPromise) {
-    setState("loading", "Loading model… (first run downloads ~80–90MB)");
+    status("loading", "Loading model… (first run downloads ~80–90MB)");
     ttsPromise = KokoroTTS.from_pretrained(MODEL_ID, {
       dtype: DTYPE,
       device: "wasm",
       progress_callback: (p: any) => {
         if (p.status === "progress" && typeof p.progress === "number") {
-          setState("loading", `Downloading model: ${Math.round(p.progress)}%`);
+          status("loading", `Downloading model: ${Math.round(p.progress)}%`);
         }
       },
     });
@@ -85,118 +53,54 @@ function loadModel(): Promise<KokoroTTS> {
   return ttsPromise;
 }
 
-function stopPlayback() {
-  pending = undefined;
-  if (current) {
-    current.pause();
-    current.src = "";
-    if (current.dataset.url) URL.revokeObjectURL(current.dataset.url);
-    current = undefined;
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
+  return btoa(bin);
 }
 
-async function speak(text: string) {
+async function synthesize(text: string) {
   generation++;
   const myGen = generation;
-  stopPlayback();
   try {
     const tts = await loadModel();
-    if (myGen !== generation) return; // superseded while loading
+    if (myGen !== generation) return;
 
-    setState("synthesizing", "Synthesizing…");
-    const tGen = performance.now();
+    status("synthesizing", "Synthesizing…");
+    const t0 = performance.now();
     const audio = await tts.generate(text, { voice: VOICE });
-    if (myGen !== generation) return; // superseded while synthesizing
+    if (myGen !== generation) return; // cancelled while synthesizing
 
-    const genMs = Math.round(performance.now() - tGen);
+    const ms = Math.round(performance.now() - t0);
     const seconds = audio.audio.length / audio.sampling_rate;
     log(
-      `synthesized ${seconds.toFixed(2)}s in ${genMs}ms ` +
-        `(${(seconds / (genMs / 1000)).toFixed(1)}x realtime)`
+      `synthesized ${seconds.toFixed(2)}s in ${ms}ms ` +
+        `(${(seconds / (ms / 1000)).toFixed(1)}x realtime)`
     );
 
-    const url = URL.createObjectURL(
-      new Blob([audio.toWav()], { type: "audio/wav" })
-    );
-    const el = new Audio(url);
-    el.dataset.url = url;
-    el.onended = () => {
-      if (current === el) {
-        stopPlayback();
-        setState("done", "Done.");
-      }
-    };
-    current = el;
-    await startPlayback(el);
+    const b64 = bytesToBase64(new Uint8Array(audio.toWav()));
+    status("synthesizing", "Sending to player…");
+    vscode.postMessage({ type: "audio", b64 });
   } catch (err: any) {
     if (myGen !== generation) return;
     const message = err?.message ?? String(err);
     log("ERROR: " + message);
-    setState("error", "Error — see log.");
+    status("error", "Error — see log.");
     vscode.postMessage({ type: "error", text: message });
   }
 }
 
-// Try to play. If the browser blocks it (no user gesture yet in this webview),
-// queue it and surface the Play button instead of erroring.
-async function startPlayback(el: HTMLAudioElement) {
-  setState("speaking");
-  try {
-    await el.play();
-    pending = undefined;
-  } catch (err: any) {
-    if (err?.name === "NotAllowedError") {
-      pending = el;
-      setState("blocked", "Audio ready — click Play.");
-    } else {
-      throw err;
-    }
-  }
-}
-
-function togglePause() {
-  if (!current) return;
-  if (current.paused) {
-    current.play();
-    setState("speaking");
-  } else {
-    current.pause();
-    setState("paused", "Paused.");
-  }
-}
-
-function stop() {
-  generation++; // cancel any in-flight synthesis
-  pending = undefined;
-  stopPlayback();
-  setState("idle", "Stopped.");
-}
-
-// User gesture: start queued audio (also grants this webview audio activation
-// for the rest of its lifetime, so later Speak calls auto-play), or resume.
-playBtn.addEventListener("click", () => {
-  if (pending) {
-    startPlayback(pending);
-  } else if (current?.paused) {
-    togglePause();
-  }
-});
-pauseBtn.addEventListener("click", togglePause);
-stopBtn.addEventListener("click", stop);
-
 window.addEventListener("message", (event) => {
   const msg = event.data;
-  switch (msg?.type) {
-    case "speak":
-      speak(String(msg.text));
-      break;
-    case "pause":
-      togglePause();
-      break;
-    case "stop":
-      stop();
-      break;
+  if (msg?.type === "synthesize") {
+    synthesize(String(msg.text));
+  } else if (msg?.type === "cancel") {
+    generation++; // drop any in-flight synthesis
+    status("idle", "Stopped.");
   }
 });
 
-setState("idle", "Webview ready.");
+status("idle", "Ready.");

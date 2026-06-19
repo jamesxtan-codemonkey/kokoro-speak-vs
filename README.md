@@ -64,6 +64,13 @@ headless under a CSP that mirrors the extension's:
   `activeTextEditor` was undefined. Fixed: dropped the `when` clause and added a
   fallback that speaks the underlying document, stripping Markdown syntax first
   (`src/textprep.ts`) so it doesn't read "hash" / "asterisk" aloud.
+- **Audio autoplay was blocked / playback was unreliable.** Playing audio inside
+  the webview hit Chromium's autoplay-gesture rule (needs a click in the webview)
+  and the focus juggling that required broke selection capture. **Reworked so the
+  webview only synthesizes** (WASM → WAV bytes) and the **extension host plays the
+  audio** through the OS player (`afplay` / `paplay`·`aplay`·`ffplay` /
+  PowerShell, `src/player.ts`). No autoplay gesture, the panel never needs focus
+  so selection stays correct, and Pause/Stop map to process SIGSTOP/SIGCONT/kill.
 
 ## Layout
 
