@@ -322,11 +322,14 @@ Still open:
 3. **M5 — Streaming playback** ✅ (partial) `tts.stream()` sentence chunks played
    in order so long text isn't truncated and audio starts early. Remaining for
    M5: **sentence highlighting** in the editor.
-4. **M6 — Settings & voices** ✅ (partial) `kokoroSpeak.voice` + `kokoroSpeak.speed`
-   settings and a **Select Voice** picker. Remaining: rules editor, secrets.
-5. **M3 — Deterministic normalization:** offline rule engine + gating.
-6. **M4 — LLM normalization agent:** pluggable backends (CLI-agent default with
-   warm process + sandboxing, plus `api`), caching, opt-in, fallback.
+4. **M6 — Settings & voices** ✅ (partial) `voice`, `speed`, `bufferSeconds`,
+   **Select Voice** picker, normalization `rules`/`replacements` + Set-API-Key.
+5. **M3 — Deterministic normalization** ✅ offline rule engine, user
+   `replacements`, gating, cache (`src/normalize.ts`).
+6. **M4 — LLM normalization agent** ✅ pluggable backends (`auto`/`cli`/`api`;
+   default local `claude`/`codex` CLI sandboxed in a temp dir, plus Claude API),
+   cache, gate, first-use opt-in, deterministic fallback. Remaining: warm CLI
+   process to cut cold-start latency.
 7. **M5 (rest) — Sentence highlighting:** highlight the sentence being spoken.
 8. **M7 — Package & publish:** docs, attribution, Marketplace listing. (VSIX
-   packaging already in place — `npm run package`.)
+   packaging in place — `npm run package`; large/platform-specific, see §11.)

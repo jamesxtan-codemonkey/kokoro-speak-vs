@@ -5,6 +5,7 @@ media/main.js.map
 media/ort/
 test/browsertest.js
 test/main-stub.js
+test/.normalize.cjs
 out/
 out.log
 *.vsix

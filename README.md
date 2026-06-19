@@ -40,6 +40,28 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),
   `kokoroSpeak.bufferSeconds`, plus a **Select Voice** quick-pick.
 
+## Normalization
+
+Before synthesis, text is rewritten into a speech-friendly form
+(`src/normalize.ts`, `$10B → 10 billion dollars`). Three modes via
+`kokoroSpeak.normalization.mode`:
+
+- `off` — none (Markdown is still stripped).
+- `deterministic` (**default**) — built-in local rules + your `replacements`.
+  Offline, instant, private. Expands currency/percent/versions/quarters/
+  abbreviations/symbols and leaves bare digits for Kokoro to vocalize.
+- `ai` — an LLM applies your natural-language `kokoroSpeak.normalization.rules`;
+  falls back to the deterministic rules on any failure. Opt-in (asks once before
+  first use, since it sends the spoken text to a model). Backend `auto` detects a
+  local `claude`/`codex` CLI (no API key) or uses the Claude API
+  (`Kokoro Speak: Set Normalization API Key`). A local gate skips the model when
+  there's nothing to normalize, and results are cached.
+
+Customize per user (User settings) or per repo (`.vscode/settings.json`):
+`kokoroSpeak.normalization.rules` (natural language) and `.replacements`
+(literal/regex), e.g. `{ "from": "K8s", "to": "Kubernetes" }`. Design notes:
+[docs/normalization-design.md](docs/normalization-design.md).
+
 ## Verification
 
 `npm test` runs a partial end-to-end round-trip: **text → Kokoro TTS → audio →
@@ -61,7 +83,8 @@ concatenates sentences into one gapless WAV at ~2.5–3x realtime; the OS player
 | `src/extension.ts`     | Host: commands, status bar, streaming play queue.            |
 | `src/synth.ts`         | Host Kokoro synthesis → concatenated WAV segments.           |
 | `src/player.ts`        | OS audio player wrapper (play/pause/stop, fallback chain).    |
-| `src/textprep.ts`      | Markdown stripping (and future text normalization).          |
+| `src/textprep.ts`      | Markdown stripping.                                           |
+| `src/normalize.ts`     | Speech normalization: deterministic rules + LLM (CLI/API).   |
 | `scripts/spike.mjs`    | Standalone Node synthesis spike → `out/spike.wav`.           |
 | `test/roundtrip.test.mjs` + `test/lib/` | Round-trip TTS↔ASR verification (`npm test`). |
 

@@ -5,6 +5,10 @@ import * as path from "path";
 import { getSpeakableText } from "./textprep";
 import { StreamPlayer } from "./player";
 import { loadModel, synthesize } from "./synth";
+import { normalize, NormMode, SEED_RULES } from "./normalize";
+
+const SECRET_KEY = "kokoroSpeak.normalization.apiKey";
+const CONSENT_KEY = "kokoroSpeak.aiConsent";
 
 // Synthesis runs in the extension host (onnxruntime-node, ~3x realtime) and audio
 // plays through the OS player. No webview: no CSP, no autoplay gesture, no panel.
@@ -23,12 +27,14 @@ type Phase =
 let status: vscode.StatusBarItem;
 let player: StreamPlayer | undefined;
 let modelReady = false;
+let extContext: vscode.ExtensionContext;
 let tempSeq = 0;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
 let activeReq = 0;
 
 export function activate(context: vscode.ExtensionContext) {
+  extContext = context;
   status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100
@@ -60,10 +66,46 @@ export function activate(context: vscode.ExtensionContext) {
       setStatus("idle");
     }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
+    vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
     vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
       speak(HELLO_TEXT, "greeting")
     )
   );
+}
+
+async function setApiKey() {
+  const key = await vscode.window.showInputBox({
+    title: "Kokoro Speak — Normalization API Key",
+    prompt: "Anthropic API key for 'api' normalization backend (stored in Secret Storage)",
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (key === undefined) return;
+  if (key === "") {
+    await extContext.secrets.delete(SECRET_KEY);
+    vscode.window.showInformationMessage("Kokoro Speak: normalization API key cleared.");
+  } else {
+    await extContext.secrets.store(SECRET_KEY, key);
+    vscode.window.showInformationMessage("Kokoro Speak: normalization API key saved.");
+  }
+}
+
+/** First-use consent for AI normalization (sends text to a model). */
+async function resolveAiConsent(): Promise<boolean> {
+  const state = extContext.globalState.get<string>(CONSENT_KEY);
+  if (state === "yes") return true;
+  if (state === "no") return false;
+  const pick = await vscode.window.showInformationMessage(
+    "Kokoro Speak: AI normalization rewrites text for speech by sending the text " +
+      "you speak to a local CLI agent or the Claude API. Enable it? " +
+      "(You can change this in settings.)",
+    { modal: true },
+    "Enable",
+    "Use offline rules only"
+  );
+  const ok = pick === "Enable";
+  await extContext.globalState.update(CONSENT_KEY, ok ? "yes" : "no");
+  return ok;
 }
 
 export function deactivate() {
@@ -109,6 +151,12 @@ function speak(text: string | undefined, what: string) {
 
   void (async () => {
     try {
+      const speakText = await prepareText(trimmed, what, cancelled);
+      if (cancelled()) return;
+      if (!speakText.trim()) {
+        setStatus("idle");
+        return;
+      }
       if (!modelReady) {
         setStatus("loading", "Loading model…");
         await loadModel((pct) =>
@@ -119,7 +167,7 @@ function speak(text: string | undefined, what: string) {
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
       await synthesize(
-        trimmed,
+        speakText,
         { voice, speed, bufferSeconds },
         {
           onSegment: (wav, dur) => {
@@ -143,6 +191,35 @@ function speak(text: string | undefined, what: string) {
       );
     }
   })();
+}
+
+/** Normalize text for speech per settings (Markdown was already stripped). */
+async function prepareText(
+  text: string,
+  what: string,
+  cancelled: () => boolean
+): Promise<string> {
+  const ncfg = vscode.workspace.getConfiguration("kokoroSpeak.normalization");
+  let mode = ncfg.get<NormMode>("mode", "deterministic");
+  if (mode === "off") return text;
+
+  if (mode === "ai") {
+    const ok = await resolveAiConsent();
+    if (cancelled()) return text;
+    if (!ok) mode = "deterministic";
+    else setStatus("synthesizing", `Preparing ${what}…`);
+  }
+
+  return normalize(text, {
+    mode,
+    rules: ncfg.get<string>("rules", SEED_RULES),
+    replacements: ncfg.get("replacements", []),
+    backend: ncfg.get("backend", "auto"),
+    command: ncfg.get<string>("command", ""),
+    model: ncfg.get<string>("model", "claude-haiku-4-5"),
+    apiKey: await extContext.secrets.get(SECRET_KEY),
+    timeoutMs: ncfg.get<number>("timeoutMs", 20000),
+  });
 }
 
 async function selectVoice() {
