@@ -72,6 +72,12 @@
           "minimum": 0.5,
           "maximum": 2.0,
           "description": "Speaking rate multiplier (0.5–2.0)."
+        },
+        "kokoroSpeak.bufferSeconds": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Audio buffered before playback. 0 = buffer the whole selection and play it as one gapless clip (smoothest, but you wait for synthesis first). A positive value starts playing after that many seconds of audio, at the cost of a brief gap at each segment boundary."
         }
       }
     },

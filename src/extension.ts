@@ -49,12 +49,14 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage("Kokoro Speak: nothing to speak.");
       return;
     }
+    // Create the synthesis webview if needed, but do NOT reveal it on every
+    // speak — control + feedback live in the status bar, so it stays a quiet
+    // background tab (it is the WASM engine; closing it just recreates it).
     ensurePanel(context);
-    // preserveFocus: keep the editor focused so selection stays intact.
-    panel!.reveal(vscode.ViewColumn.Beside, true);
     const cfg = vscode.workspace.getConfiguration("kokoroSpeak");
     const voice = cfg.get<string>("voice", "af_heart");
     const speed = cfg.get<number>("speed", 1.0);
+    const bufferSeconds = cfg.get<number>("bufferSeconds", 0);
     resetPlayback();
     activeReq = ++reqSeq;
     setStatus("synthesizing", `Synthesizing ${what}…`);
@@ -63,6 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
       text: trimmed,
       voice,
       speed,
+      bufferSeconds,
       reqId: activeReq,
     });
   };

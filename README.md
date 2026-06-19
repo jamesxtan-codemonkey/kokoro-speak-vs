@@ -72,16 +72,31 @@ headless under a CSP that mirrors the extension's:
   PowerShell, `src/player.ts`). No autoplay gesture, the panel never needs focus
   so selection stays correct, and Pause/Stop map to process SIGSTOP/SIGCONT/kill.
 - **Long text was cut off mid-sentence.** Kokoro has a ~510-token context limit,
-  so a single `generate()` silently truncated long selections. Fixed with
-  **streaming**: the webview uses `tts.stream()` to emit one WAV per sentence and
-  the host plays them in a **queue** (`src/extension.ts`), so the first sentence
-  starts while the rest synthesize and nothing is dropped. A request-id guard
-  prevents a stale chunk from a superseded request leaking into the queue.
+  so a single `generate()` silently truncated long selections. Fixed by splitting
+  into sentences with an explicit `TextSplitterStream` we `close()` (passing the
+  raw string never terminates the stream — a latent hang where `audioEnd` never
+  fired). A request-id guard drops chunks from a superseded request.
+- **Gaps between sentences.** Each OS-player launch costs ~0.85s, so playing one
+  WAV per sentence baked a gap before every sentence. Fixed by **concatenating**
+  the sentences' audio into one gapless WAV (16-bit PCM) and playing it in a
+  single `afplay`. `kokoroSpeak.bufferSeconds` controls the lead: `0` (default)
+  buffers the whole selection for the smoothest result; a positive value starts
+  sooner with a brief gap only at each segment boundary.
 
 ### Settings (M6, partial)
 
-- `kokoroSpeak.voice` (28 Kokoro voices) and `kokoroSpeak.speed` (0.5–2.0), wired
-  through to `tts.stream()`. Plus a **Kokoro Speak: Select Voice** quick-pick.
+- `kokoroSpeak.voice` (28 Kokoro voices), `kokoroSpeak.speed` (0.5–2.0), and
+  `kokoroSpeak.bufferSeconds` (gapless vs. low-latency), wired through to
+  synthesis. Plus a **Kokoro Speak: Select Voice** quick-pick.
+
+### About the panel
+
+The "Kokoro Speak" tab is the **synthesis engine** — Kokoro runs as WASM, which
+must live in a webview. All control + feedback is in the status bar, so the panel
+no longer pops to the front on each Speak; it sits quietly in the background. It
+can't be removed entirely without moving inference to the host via
+`onnxruntime-node` (native binaries → larger, platform-specific VSIX), which is a
+possible future trade.
 
 ## Layout
 

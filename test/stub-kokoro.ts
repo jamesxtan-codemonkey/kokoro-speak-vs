@@ -24,6 +24,17 @@ function encodeWav(samples: Float32Array, rate = 24000): ArrayBuffer {
   return buf;
 }
 
+export class TextSplitterStream {
+  _text = "";
+  _closed = false;
+  push(...texts: string[]) {
+    this._text += texts.join("");
+  }
+  close() {
+    this._closed = true;
+  }
+}
+
 export class KokoroTTS {
   voices = { af_heart: 1 };
   static async from_pretrained(): Promise<KokoroTTS> {
@@ -39,10 +50,13 @@ export class KokoroTTS {
   }
 
   // Mirror kokoro-js: split into "sentences" and yield one audio per chunk.
-  async *stream(text: string, _opts?: unknown) {
+  // (push/close happen before iteration in our flow, so reading _text is fine.)
+  async *stream(splitter: TextSplitterStream | string, _opts?: unknown) {
+    const text =
+      typeof splitter === "string" ? splitter : splitter._text;
     const parts = String(text).split(/(?<=[.!?])\s+/).filter(Boolean);
-    for (const part of parts.length ? parts : [text]) {
-      const samples = new Float32Array(2400);
+    for (const part of parts.length ? parts : [String(text)]) {
+      const samples = new Float32Array(2400); // ~0.1s each
       yield {
         text: part,
         phonemes: "",
