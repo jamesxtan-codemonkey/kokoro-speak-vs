@@ -15,10 +15,58 @@
   "contributes": {
     "commands": [
       {
+        "command": "kokoroSpeak.speakSelection",
+        "title": "Kokoro Speak: Speak Selection",
+        "category": "Kokoro Speak"
+      },
+      {
+        "command": "kokoroSpeak.speakDocument",
+        "title": "Kokoro Speak: Speak Document",
+        "category": "Kokoro Speak"
+      },
+      {
+        "command": "kokoroSpeak.pause",
+        "title": "Kokoro Speak: Pause / Resume",
+        "category": "Kokoro Speak"
+      },
+      {
+        "command": "kokoroSpeak.stop",
+        "title": "Kokoro Speak: Stop",
+        "category": "Kokoro Speak"
+      },
+      {
         "command": "kokoroSpeak.speakHello",
-        "title": "Kokoro Speak: Speak Hello (M1 spike)"
+        "title": "Kokoro Speak: Speak Hello (M1 spike)",
+        "category": "Kokoro Speak"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "kokoroSpeak.speakSelection",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "kokoroSpeak.pause",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      },
+      {
+        "command": "kokoroSpeak.stop",
+        "key": "ctrl+alt+x",
+        "mac": "cmd+alt+x"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "kokoroSpeak.speakSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@99"
+        }
+      ]
+    }
   },
   "scripts": {
     "spike": "node scripts/spike.mjs",

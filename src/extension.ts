@@ -1,24 +1,77 @@
 import * as vscode from "vscode";
 
-// M1 spike host: a single command that opens a webview, asks it to synthesize a
-// hardcoded sentence with kokoro-js (WASM), and plays it. This validates the
-// in-webview inference + playback path that the full extension will build on.
+// M2 host: editor integration. Commands capture text from the active editor and
+// drive a hidden-ish webview that runs Kokoro (WASM) and plays audio. A status
+// bar item reflects playback state and offers stop.
 
 const HELLO_TEXT =
   "Hello from Kokoro Speak. This sentence is being synthesized by the Kokoro 82 million parameter model, running entirely inside a VS Code webview.";
 
+type PlaybackState =
+  | "idle"
+  | "loading"
+  | "synthesizing"
+  | "speaking"
+  | "paused"
+  | "done"
+  | "error";
+
 let panel: vscode.WebviewPanel | undefined;
+let status: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext) {
+  status = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  status.command = "kokoroSpeak.stop";
+  setStatus("idle");
+  context.subscriptions.push(status);
+
+  const speak = (text: string | undefined) => {
+    const trimmed = text?.trim();
+    if (!trimmed) {
+      vscode.window.showInformationMessage("Kokoro Speak: nothing to speak.");
+      return;
+    }
+    ensurePanel(context);
+    panel!.reveal(vscode.ViewColumn.Beside, true);
+    setStatus("loading");
+    panel!.webview.postMessage({ type: "speak", text: trimmed });
+  };
+
   context.subscriptions.push(
-    vscode.commands.registerCommand("kokoroSpeak.speakHello", () => {
-      if (!panel) {
-        panel = createPanel(context);
-        panel.onDidDispose(() => (panel = undefined));
+    vscode.commands.registerCommand("kokoroSpeak.speakSelection", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage("Kokoro Speak: no active editor.");
+        return;
       }
-      panel.reveal(vscode.ViewColumn.Beside);
-      panel.webview.postMessage({ type: "speak", text: HELLO_TEXT });
-    })
+      const sel = editor.selection;
+      // Empty selection → fall back to the whole document.
+      const text = sel.isEmpty
+        ? editor.document.getText()
+        : editor.document.getText(sel);
+      speak(text);
+    }),
+
+    vscode.commands.registerCommand("kokoroSpeak.speakDocument", () => {
+      const editor = vscode.window.activeTextEditor;
+      speak(editor?.document.getText());
+    }),
+
+    vscode.commands.registerCommand("kokoroSpeak.pause", () => {
+      panel?.webview.postMessage({ type: "pause" });
+    }),
+
+    vscode.commands.registerCommand("kokoroSpeak.stop", () => {
+      panel?.webview.postMessage({ type: "stop" });
+      setStatus("idle");
+    }),
+
+    vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
+      speak(HELLO_TEXT)
+    )
   );
 }
 
@@ -26,32 +79,57 @@ export function deactivate() {
   panel?.dispose();
 }
 
-function createPanel(context: vscode.ExtensionContext): vscode.WebviewPanel {
+function ensurePanel(context: vscode.ExtensionContext) {
+  if (panel) return;
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
-  const p = vscode.window.createWebviewPanel(
+  panel = vscode.window.createWebviewPanel(
     "kokoroSpeak",
     "Kokoro Speak",
-    vscode.ViewColumn.Beside,
+    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [mediaRoot],
     }
   );
+  panel.onDidDispose(() => {
+    panel = undefined;
+    setStatus("idle");
+  });
 
-  p.webview.onDidReceiveMessage((msg) => {
-    if (msg?.type === "status") {
-      vscode.window.setStatusBarMessage(`Kokoro: ${msg.text}`, 4000);
+  panel.webview.onDidReceiveMessage((msg) => {
+    if (msg?.type === "state") {
+      setStatus(msg.state as PlaybackState, msg.detail);
     } else if (msg?.type === "error") {
+      setStatus("error");
       vscode.window.showErrorMessage(`Kokoro Speak: ${msg.text}`);
     }
   });
 
-  const mainUri = p.webview.asWebviewUri(
+  const mainUri = panel.webview.asWebviewUri(
     vscode.Uri.joinPath(mediaRoot, "main.js")
   );
-  p.webview.html = getHtml(p.webview, mainUri);
-  return p;
+  panel.webview.html = getHtml(panel.webview, mainUri);
+}
+
+function setStatus(state: PlaybackState, detail?: string) {
+  if (!status) return;
+  const map: Record<PlaybackState, { icon: string; label: string }> = {
+    idle: { icon: "unmute", label: "Kokoro" },
+    loading: { icon: "loading~spin", label: "Loading model" },
+    synthesizing: { icon: "loading~spin", label: "Synthesizing" },
+    speaking: { icon: "debug-pause", label: "Speaking" },
+    paused: { icon: "play", label: "Paused" },
+    done: { icon: "unmute", label: "Kokoro" },
+    error: { icon: "error", label: "Error" },
+  };
+  const { icon, label } = map[state];
+  status.text = `$(${icon}) ${detail ?? label}`;
+  status.tooltip =
+    state === "speaking" || state === "synthesizing" || state === "loading"
+      ? "Kokoro Speak — click to stop"
+      : "Kokoro Speak";
+  status.show();
 }
 
 function getHtml(webview: vscode.Webview, mainUri: vscode.Uri): string {
@@ -75,17 +153,20 @@ function getHtml(webview: vscode.Webview, mainUri: vscode.Uri): string {
   <title>Kokoro Speak</title>
   <style>
     body { font-family: var(--vscode-font-family); padding: 1rem; }
+    .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
+    button { font: inherit; padding: .3rem .8rem; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
     #log { white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace);
-           font-size: 12px; opacity: 0.85; margin-top: 1rem; }
-    .row { display: flex; gap: .5rem; align-items: center; }
-    button { font: inherit; padding: .3rem .8rem; }
+           font-size: 12px; opacity: 0.8; margin-top: 1rem; }
   </style>
 </head>
 <body>
+  <div class="row"><strong>Kokoro Speak</strong></div>
+  <p id="state">Idle.</p>
   <div class="row">
-    <strong>Kokoro Speak — M1 spike</strong>
+    <button id="pause" disabled>Pause</button>
+    <button id="stop" disabled>Stop</button>
   </div>
-  <p id="state">Idle. Run the command to synthesize.</p>
   <div id="log"></div>
   <script type="module" src="${mainUri}"></script>
 </body>

@@ -6,12 +6,11 @@ LLM-driven step that rewrites text into a speech-friendly form first.
 
 See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 
-## Status: M1 — synthesis spike (done)
+## Status
 
-Goal of M1 was to prove Kokoro actually synthesizes in this environment, in both
-the Node and the in-browser (webview) paths.
+### M1 — synthesis spike (done)
 
-Verified:
+Proved Kokoro synthesizes in both the Node and in-browser (webview) paths.
 
 - **Node path** (`onnxruntime-node`, `device: "cpu"`): model loads, generates
   audio at ~3x realtime, writes a valid 24kHz WAV.
@@ -23,6 +22,31 @@ Verified:
 {"status":"ok","loadMs":2855,"genMs":5194,"seconds":3.08,"sampleRate":24000,"wavBytes":295244,"voices":28}
 ```
 
+### Round-trip verification (done)
+
+`npm test` runs a partial end-to-end check: **text → Kokoro TTS → audio → local
+Whisper (whisper-base.en) → text**, asserting word-level match. This proves the
+speech is intelligible, not just non-empty. All local, no API key.
+
+> Finding: both whisper base.en and small.en mishear the brand name "Kokoro"
+> (an out-of-vocab proper noun) — a verifier limitation, not a synthesis defect.
+> The suite asserts ordinary words survive the round-trip and documents this.
+
+### M2 — editor integration (done; webview path verified headless)
+
+Commands: **Speak Selection** (`Cmd/Ctrl+Alt+S`, empty selection → whole doc),
+**Speak Document**, **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
+(`Cmd/Ctrl+Alt+X`), plus a right-click "Speak Selection" entry and a status-bar
+item that reflects state and stops on click.
+
+Verified in a headless browser against the real `media/main.js`:
+`loading → synthesizing → speaking → done`, and **Stop cancels in-flight
+synthesis** (generation token prevents a cancelled request from ever playing).
+
+> Not yet verified: the VS Code Extension Host UI itself (needs `F5` — there's no
+> `code` CLI here). The headless browser test exercises the webview's synthesis +
+> playback state machine, which is the substantive part.
+
 ## Layout
 
 | Path                   | What                                                         |
@@ -31,6 +55,8 @@ Verified:
 | `src/extension.ts`     | Extension host: `Kokoro Speak: Speak Hello` command.        |
 | `webview/main.ts`      | Webview: loads Kokoro (WASM), synthesizes, plays audio.     |
 | `webview/browsertest.ts` + `test/harness.html` | Headless-browser check of the WASM inference path. |
+| `test/m2harness.html`  | Headless-browser harness for the M2 webview state machine.  |
+| `test/roundtrip.test.mjs` + `test/lib/` | Round-trip TTS↔ASR verification (`npm test`). |
 
 ## Run it
 
