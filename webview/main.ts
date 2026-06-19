@@ -21,6 +21,8 @@ if (ortWasm) {
 
 const stateEl = document.getElementById("state")!;
 const logEl = document.getElementById("log")!;
+const hintEl = document.getElementById("hint")!;
+const playBtn = document.getElementById("play") as HTMLButtonElement;
 const pauseBtn = document.getElementById("pause") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop") as HTMLButtonElement;
 
@@ -30,18 +32,26 @@ type State =
   | "synthesizing"
   | "speaking"
   | "paused"
+  | "blocked"
   | "done"
   | "error";
 
 function setState(state: State, detail?: string) {
   stateEl.textContent = detail ?? state;
+  // Play is offered when audio is queued but blocked, or paused.
+  playBtn.disabled = !(state === "blocked" || state === "paused");
   pauseBtn.disabled = !(state === "speaking" || state === "paused");
   pauseBtn.textContent = state === "paused" ? "Resume" : "Pause";
   stopBtn.disabled = !(
     state === "speaking" ||
     state === "paused" ||
+    state === "blocked" ||
     state === "synthesizing"
   );
+  hintEl.textContent =
+    state === "blocked"
+      ? "VS Code blocks audio until you click in this panel. Click Play once — after that, Speak plays automatically."
+      : "";
   vscode.postMessage({ type: "state", state, detail });
 }
 function log(line: string) {
@@ -54,6 +64,8 @@ const VOICE = "af_heart";
 
 let ttsPromise: Promise<KokoroTTS> | undefined;
 let current: HTMLAudioElement | undefined;
+// Audio synthesized and ready, but waiting for a user gesture to start.
+let pending: HTMLAudioElement | undefined;
 // Monotonic token so a stale synthesis can't start playing after Stop/replace.
 let generation = 0;
 
@@ -74,6 +86,7 @@ function loadModel(): Promise<KokoroTTS> {
 }
 
 function stopPlayback() {
+  pending = undefined;
   if (current) {
     current.pause();
     current.src = "";
@@ -114,14 +127,30 @@ async function speak(text: string) {
       }
     };
     current = el;
-    setState("speaking");
-    await el.play();
+    await startPlayback(el);
   } catch (err: any) {
     if (myGen !== generation) return;
     const message = err?.message ?? String(err);
     log("ERROR: " + message);
     setState("error", "Error — see log.");
     vscode.postMessage({ type: "error", text: message });
+  }
+}
+
+// Try to play. If the browser blocks it (no user gesture yet in this webview),
+// queue it and surface the Play button instead of erroring.
+async function startPlayback(el: HTMLAudioElement) {
+  setState("speaking");
+  try {
+    await el.play();
+    pending = undefined;
+  } catch (err: any) {
+    if (err?.name === "NotAllowedError") {
+      pending = el;
+      setState("blocked", "Audio ready — click Play.");
+    } else {
+      throw err;
+    }
   }
 }
 
@@ -138,10 +167,20 @@ function togglePause() {
 
 function stop() {
   generation++; // cancel any in-flight synthesis
+  pending = undefined;
   stopPlayback();
   setState("idle", "Stopped.");
 }
 
+// User gesture: start queued audio (also grants this webview audio activation
+// for the rest of its lifetime, so later Speak calls auto-play), or resume.
+playBtn.addEventListener("click", () => {
+  if (pending) {
+    startPlayback(pending);
+  } else if (current?.paused) {
+    togglePause();
+  }
+});
 pauseBtn.addEventListener("click", togglePause);
 stopBtn.addEventListener("click", stop);
 

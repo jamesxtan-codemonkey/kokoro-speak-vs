@@ -4,6 +4,7 @@ media/main.js
 media/main.js.map
 media/ort/
 test/browsertest.js
+test/main-stub.js
 out/
 out.log
 *.vsix

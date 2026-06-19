@@ -14,6 +14,7 @@ type PlaybackState =
   | "synthesizing"
   | "speaking"
   | "paused"
+  | "blocked"
   | "done"
   | "error";
 
@@ -134,6 +135,11 @@ function ensurePanel(context: vscode.ExtensionContext) {
   panel.webview.onDidReceiveMessage((msg) => {
     if (msg?.type === "state") {
       setStatus(msg.state as PlaybackState, msg.detail);
+      // Autoplay blocked: bring the panel forward so the Play button is one
+      // click away. After that first click the document keeps audio activation.
+      if (msg.state === "blocked") {
+        panel?.reveal(vscode.ViewColumn.Beside, false);
+      }
     } else if (msg?.type === "error") {
       setStatus("error");
       vscode.window.showErrorMessage(`Kokoro Speak: ${msg.text}`);
@@ -160,6 +166,7 @@ function setStatus(state: PlaybackState, detail?: string) {
     synthesizing: { icon: "loading~spin", label: "Synthesizing" },
     speaking: { icon: "debug-pause", label: "Speaking" },
     paused: { icon: "play", label: "Paused" },
+    blocked: { icon: "play", label: "Click Play in panel" },
     done: { icon: "unmute", label: "Kokoro" },
     error: { icon: "error", label: "Error" },
   };
@@ -210,9 +217,11 @@ function getHtml(
   <div class="row"><strong>Kokoro Speak</strong></div>
   <p id="state">Idle.</p>
   <div class="row">
+    <button id="play" disabled>▶ Play</button>
     <button id="pause" disabled>Pause</button>
     <button id="stop" disabled>Stop</button>
   </div>
+  <p id="hint" style="opacity:.7;font-size:12px"></p>
   <div id="log"></div>
   <script type="module" src="${mainUri}"></script>
 </body>
