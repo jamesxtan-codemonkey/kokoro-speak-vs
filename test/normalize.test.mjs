@@ -37,6 +37,8 @@ test("deterministic: tilde, ranges, arrows, emoji", () => {
     ["queue: -> ->", "queue: to to"], // adjacent arrows both convert
     ["x-->0", "x-->0"], // code: not whitespace-flanked → left intact
     ["a->b", "a->b"], // code: member access → left intact
+    ["<!-- -->", "<!-- -->"], // double-dash --> left alone (HTML comment)
+    ["loop --> exit", "loop --> exit"], // double-dash arrow not matched
     ["2*3 and a*b", "2*3 and a*b"], // asterisks not stripped (no 2*3→23)
     ["✅ done", "check done"],
     ["build ✅", "build check"],

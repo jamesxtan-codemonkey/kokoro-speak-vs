@@ -119,11 +119,13 @@ export function applySpellOut(text: string, list?: string[]): string {
 export function deterministic(text: string): string {
   let s = text;
 
-  // Arrows → "to". Unicode arrows in any context; ASCII "->" only when
-  // whitespace-flanked, so code like "x-->0" or "a->b" is left intact.
+  // Arrows → "to". Unicode arrows in any context; the ASCII single "->" only
+  // when whitespace-flanked, so code like "x->y", "a->b" is left intact. A
+  // double "-->" is deliberately not matched — it's ambiguous with HTML comment
+  // closes ("<!-- -->") and code, so leave it alone. Non-consuming boundaries
+  // let adjacent arrows ("-> ->") both convert.
   s = s.replace(/\s*(?:→|⟶|⇒|↦)\s*/g, " to ");
-  // Non-consuming boundaries so adjacent arrows ("-> ->") both convert.
-  s = s.replace(/(?<=^|\s)-+>(?=\s|$)/g, "to");
+  s = s.replace(/(?<=^|\s)->(?=\s|$)/g, "to");
 
   // Tilde before a number/currency → "about" (~100 → about 100).
   s = s.replace(/~\s?(?=[\d$])/g, "about ");
