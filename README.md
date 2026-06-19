@@ -62,6 +62,16 @@ Customize per user (User settings) or per repo (`.vscode/settings.json`):
 (literal/regex), e.g. `{ "from": "K8s", "to": "Kubernetes" }`. Design notes:
 [docs/normalization-design.md](docs/normalization-design.md).
 
+### AI-driven config
+
+The status-bar tooltip has a **⚙ Config** link (also `Kokoro Speak: Configure
+Normalization (AI)`). It reads [skills/normalization-config.md](skills/normalization-config.md)
+— an editable instruction file — and runs the same LLM backend to turn a
+plain-language request ("offline only", "say K8s as Kubernetes", "use codex")
+into the right settings, asking a clarifying question only if needed, then
+applying the change after you confirm. Update the `.md` to change how it behaves;
+no code change required. Falls back to the Settings UI if no backend is available.
+
 ## Verification
 
 `npm test` runs a partial end-to-end round-trip: **text → Kokoro TTS → audio →
@@ -85,6 +95,7 @@ concatenates sentences into one gapless WAV at ~2.5–3x realtime; the OS player
 | `src/player.ts`        | OS audio player wrapper (play/pause/stop, fallback chain).    |
 | `src/textprep.ts`      | Markdown stripping.                                           |
 | `src/normalize.ts`     | Speech normalization: deterministic rules + LLM (CLI/API).   |
+| `skills/normalization-config.md` | Editable instructions the AI **⚙ Config** flow follows. |
 | `scripts/spike.mjs`    | Standalone Node synthesis spike → `out/spike.wav`.           |
 | `test/roundtrip.test.mjs` + `test/lib/` | Round-trip TTS↔ASR verification (`npm test`). |
 

@@ -5,10 +5,26 @@ import * as path from "path";
 import { getSpeakableText } from "./textprep";
 import { StreamPlayer } from "./player";
 import { loadModel, synthesize } from "./synth";
-import { normalize, NormMode, SEED_RULES } from "./normalize";
+import {
+  normalize,
+  NormMode,
+  SEED_RULES,
+  callBackend,
+  hasBackend,
+  BackendOptions,
+} from "./normalize";
 
 const SECRET_KEY = "kokoroSpeak.normalization.apiKey";
 const CONSENT_KEY = "kokoroSpeak.aiConsent";
+const NORM_KEYS = [
+  "mode",
+  "rules",
+  "replacements",
+  "backend",
+  "command",
+  "model",
+  "timeoutMs",
+].map((k) => "kokoroSpeak.normalization." + k);
 
 // Synthesis runs in the extension host (onnxruntime-node, ~3x realtime) and audio
 // plays through the OS player. No webview: no CSP, no autoplay gesture, no panel.
@@ -67,6 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
     vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
+    vscode.commands.registerCommand("kokoroSpeak.configure", configure),
     vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
       speak(HELLO_TEXT, "greeting")
     )
@@ -193,6 +210,148 @@ function speak(text: string | undefined, what: string) {
   })();
 }
 
+async function backendOptions(): Promise<BackendOptions> {
+  const n = vscode.workspace.getConfiguration("kokoroSpeak.normalization");
+  return {
+    backend: n.get("backend", "auto"),
+    command: n.get<string>("command", ""),
+    model: n.get<string>("model", "claude-haiku-4-5"),
+    apiKey: await extContext.secrets.get(SECRET_KEY),
+    // Config is interactive; give the (slow) CLI room.
+    timeoutMs: Math.max(60000, n.get<number>("timeoutMs", 20000)),
+  };
+}
+
+function openSettingsUi() {
+  vscode.commands.executeCommand(
+    "workbench.action.openSettings",
+    "kokoroSpeak.normalization"
+  );
+}
+
+function parseJsonObject(s: string): any | null {
+  const i = s.indexOf("{");
+  const j = s.lastIndexOf("}");
+  if (i < 0 || j <= i) return null;
+  try {
+    return JSON.parse(s.slice(i, j + 1));
+  } catch {
+    return null;
+  }
+}
+
+/** AI-driven configuration, instructed by skills/normalization-config.md. */
+async function configure() {
+  let skill = "";
+  try {
+    const uri = vscode.Uri.joinPath(
+      extContext.extensionUri,
+      "skills",
+      "normalization-config.md"
+    );
+    skill = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+  } catch {
+    /* skill missing — fall back below */
+  }
+
+  const opts = await backendOptions();
+  if (!skill || !hasBackend(opts)) {
+    const pick = await vscode.window.showInformationMessage(
+      "Kokoro Speak: AI configuration needs a normalization backend (a local " +
+        "claude/codex CLI, or an API key). Open settings to configure manually?",
+      "Open Settings"
+    );
+    if (pick) openSettingsUi();
+    return;
+  }
+
+  const request = await vscode.window.showInputBox({
+    title: "Kokoro Speak — Configure (AI)",
+    prompt:
+      'Describe how text should be read aloud (e.g. "offline only", ' +
+      '"say K8s as Kubernetes", "use codex", "spell out acronyms").',
+    ignoreFocusOut: true,
+  });
+  if (!request) return;
+
+  const n = vscode.workspace.getConfiguration("kokoroSpeak.normalization");
+  const current: Record<string, unknown> = {};
+  for (const key of NORM_KEYS) {
+    current[key] = n.get(key.replace("kokoroSpeak.normalization.", ""));
+  }
+
+  let convo = `User: ${request}`;
+  for (let round = 0; round < 4; round++) {
+    const raw = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Kokoro Speak: thinking…" },
+      () =>
+        callBackend(
+          skill,
+          `Current settings:\n${JSON.stringify(current, null, 2)}\n\nConversation so far:\n${convo}`,
+          opts,
+          2048
+        )
+    );
+    if (raw == null) {
+      vscode.window.showErrorMessage("Kokoro Speak: the configuration agent didn't respond.");
+      return;
+    }
+    const obj = parseJsonObject(raw);
+    if (!obj) {
+      vscode.window.showErrorMessage("Kokoro Speak: couldn't parse the configuration response.");
+      return;
+    }
+    if (typeof obj.ask === "string" && !obj.settings) {
+      const answer = await vscode.window.showInputBox({
+        title: "Kokoro Speak — Configure",
+        prompt: obj.ask,
+        ignoreFocusOut: true,
+      });
+      if (answer === undefined) return;
+      convo += `\nAssistant: ${obj.ask}\nUser: ${answer}`;
+      continue;
+    }
+    if (obj.settings && typeof obj.settings === "object") {
+      await applySettings(obj.settings, typeof obj.summary === "string" ? obj.summary : "");
+      return;
+    }
+    return;
+  }
+  vscode.window.showInformationMessage("Kokoro Speak: configuration didn't converge — try rephrasing.");
+}
+
+async function applySettings(settings: Record<string, unknown>, summary: string) {
+  const entries = Object.entries(settings).filter(([k]) => NORM_KEYS.includes(k));
+  if (!entries.length) {
+    vscode.window.showInformationMessage("Kokoro Speak: no changes proposed.");
+    return;
+  }
+  const list = entries
+    .map(([k, v]) => `• ${k.replace("kokoroSpeak.normalization.", "")} = ${preview(v)}`)
+    .join("\n");
+  const ok = await vscode.window.showInformationMessage(
+    `Kokoro Speak${summary ? " — " + summary : ""}\n\nApply these changes?\n${list}`,
+    { modal: true },
+    "Apply"
+  );
+  if (ok !== "Apply") return;
+
+  const target = vscode.workspace.workspaceFolders?.length
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  const cfg = vscode.workspace.getConfiguration();
+  for (const [k, v] of entries) await cfg.update(k, v, target);
+  if (settings["kokoroSpeak.normalization.mode"] === "ai") {
+    await extContext.globalState.update(CONSENT_KEY, "yes"); // explicit opt-in
+  }
+  vscode.window.showInformationMessage("Kokoro Speak: configuration updated.");
+}
+
+function preview(v: unknown): string {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > 60 ? s.slice(0, 57) + "…" : s;
+}
+
 /** Normalize text for speech per settings (Markdown was already stripped). */
 async function prepareText(
   text: string,
@@ -306,7 +465,10 @@ function setStatus(phase: Phase, detail?: string) {
     const pl = phase === "paused" ? "$(play) Resume" : "$(debug-pause) Pause";
     tip.appendMarkdown(`[${pl}](command:kokoroSpeak.pause) · `);
   }
-  tip.appendMarkdown("[$(debug-stop) Stop](command:kokoroSpeak.stop)");
+  tip.appendMarkdown(
+    "[$(debug-stop) Stop](command:kokoroSpeak.stop) · " +
+      "[$(gear) Config](command:kokoroSpeak.configure)"
+  );
   status.tooltip = tip;
   status.show();
 }
