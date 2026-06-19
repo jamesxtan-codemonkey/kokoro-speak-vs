@@ -32,6 +32,14 @@ test("strips headings, bold, italic, links, code", () => {
   assert.equal(out, "Title\n\nA bold and italic word, a link, and code.");
 });
 
+test("underscore emphasis only at word boundaries (snake_case survives)", () => {
+  // intra-word underscores are kept; real _emphasis_ is stripped
+  assert.equal(
+    stripMarkdown("use foo_bar and _real_ emphasis in file_name.ts"),
+    "use foo_bar and real emphasis in file_name.ts"
+  );
+});
+
 test("heading on a line is not merged with the next line", () => {
   // single newline after heading would otherwise unwrap into one line
   assert.equal(

@@ -26,13 +26,16 @@ test("deterministic: currency, percent, version, quarter, abbreviations", () => 
   assert.equal(N.deterministic("e.g. this"), "for example this");
 });
 
-test("deterministic: tilde, ranges, arrows, asterisks, emoji", () => {
+test("deterministic: tilde, ranges, arrows, emoji", () => {
   const cases = [
     ["~5–20%", "about 5 to 20 percent"], // tilde + range + percent (en dash)
+    ["~5-20%", "about 5 to 20 percent"], // ASCII hyphen range in percent context
     ["~100 events", "about 100 events"],
     ["A → C", "A to C"],
-    ["step 1 -> step 2", "step 1 to step 2"],
-    ["**bold** and *italic*", "bold and italic"], // no "asterisk"
+    ["step 1 -> step 2", "step 1 to step 2"], // space-flanked ASCII arrow
+    ["x-->0", "x-->0"], // code: not whitespace-flanked → left intact
+    ["a->b", "a->b"], // code: member access → left intact
+    ["2*3 and a*b", "2*3 and a*b"], // asterisks not stripped (no 2*3→23)
     ["✅ done", "check done"],
     ["build ✅", "build check"],
     ["ship it 🚀🔥", "ship it rocket fire"], // mapped emoji

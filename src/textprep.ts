@@ -42,10 +42,15 @@ export function stripMarkdown(md: string): string {
   s = s.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1");
   // Inline code `x` → x.
   s = s.replace(/`([^`]+)`/g, "$1");
-  // Emphasis / bold / strikethrough markers.
-  s = s.replace(/(\*\*|__)(.*?)\1/g, "$2");
-  s = s.replace(/(\*|_)(.*?)\1/g, "$2");
-  s = s.replace(/~~(.*?)~~/g, "$1");
+  // Emphasis / bold / strikethrough markers. Asterisks in any context; the
+  // underscore variants only at word boundaries — CommonMark does not treat
+  // intra-word "_" as emphasis, so identifiers like snake_case / file_name
+  // keep their underscores.
+  s = s.replace(/\*\*(.+?)\*\*/g, "$1");
+  s = s.replace(/\*(.+?)\*/g, "$1");
+  s = s.replace(/(?<!\w)__(.+?)__(?!\w)/g, "$1");
+  s = s.replace(/(?<!\w)_(.+?)_(?!\w)/g, "$1");
+  s = s.replace(/~~(.+?)~~/g, "$1");
   // Stray HTML tags.
   s = s.replace(/<[^>]+>/g, " ");
 

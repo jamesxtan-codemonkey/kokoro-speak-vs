@@ -132,6 +132,9 @@ async function resolveAiConsent(): Promise<boolean> {
     "Enable",
     "Use offline rules only"
   );
+  // Dismissing (Escape) is undefined — don't persist a decision, so we ask again
+  // next time. Only an explicit button press is remembered.
+  if (pick === undefined) return false;
   const ok = pick === "Enable";
   await extContext.globalState.update(CONSENT_KEY, ok ? "yes" : "no");
   return ok;
@@ -241,15 +244,39 @@ function openSettingsUi() {
   );
 }
 
+/**
+ * Extract the first valid JSON object from an LLM response, tolerating code
+ * fences and prose (incl. stray braces) around it. Scans each '{' as a start,
+ * tracks brace depth (string-aware), and returns the first balanced slice that
+ * parses.
+ */
 function parseJsonObject(s: string): any | null {
-  const i = s.indexOf("{");
-  const j = s.lastIndexOf("}");
-  if (i < 0 || j <= i) return null;
-  try {
-    return JSON.parse(s.slice(i, j + 1));
-  } catch {
-    return null;
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1] : s;
+  for (let start = body.indexOf("{"); start >= 0; start = body.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < body.length; i++) {
+      const c = body[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        try {
+          return JSON.parse(body.slice(start, i + 1));
+        } catch {
+          break; // not valid from this start; try the next '{'
+        }
+      }
+    }
   }
+  return null;
 }
 
 /** AI-driven configuration, instructed by skills/normalization-config.md. */
@@ -363,10 +390,28 @@ async function renderAsk(ask: Ask): Promise<string | undefined> {
   });
 }
 
+// Validators per setting — the LLM's proposed values are untrusted; a wrong type
+// would corrupt later normalization, so only well-typed values are persisted.
+const NORM_VALID: Record<string, (v: unknown) => boolean> = {
+  "kokoroSpeak.normalization.mode": (v) =>
+    v === "off" || v === "deterministic" || v === "ai",
+  "kokoroSpeak.normalization.rules": (v) => typeof v === "string",
+  "kokoroSpeak.normalization.replacements": (v) => Array.isArray(v),
+  "kokoroSpeak.normalization.spellOut": (v) =>
+    Array.isArray(v) && v.every((x) => typeof x === "string"),
+  "kokoroSpeak.normalization.backend": (v) =>
+    v === "auto" || v === "cli" || v === "api",
+  "kokoroSpeak.normalization.command": (v) => typeof v === "string",
+  "kokoroSpeak.normalization.model": (v) => typeof v === "string",
+  "kokoroSpeak.normalization.timeoutMs": (v) => typeof v === "number" && v >= 1000,
+};
+
 async function applySettings(settings: Record<string, unknown>, summary: string) {
-  const entries = Object.entries(settings).filter(([k]) => NORM_KEYS.includes(k));
+  const entries = Object.entries(settings).filter(([k, v]) => NORM_VALID[k]?.(v));
   if (!entries.length) {
-    vscode.window.showInformationMessage("Kokoro Speak: no changes proposed.");
+    vscode.window.showInformationMessage(
+      "Kokoro Speak: no valid changes proposed."
+    );
     return;
   }
   const list = entries
