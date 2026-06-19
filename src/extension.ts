@@ -265,23 +265,17 @@ async function configure() {
     return;
   }
 
-  const request = await vscode.window.showInputBox({
-    title: "Kokoro Speak — Configure (AI)",
-    prompt:
-      'Describe how text should be read aloud (e.g. "offline only", ' +
-      '"say K8s as Kubernetes", "use codex", "spell out acronyms").',
-    ignoreFocusOut: true,
-  });
-  if (!request) return;
-
   const n = vscode.workspace.getConfiguration("kokoroSpeak.normalization");
   const current: Record<string, unknown> = {};
   for (const key of NORM_KEYS) {
     current[key] = n.get(key.replace("kokoroSpeak.normalization.", ""));
   }
 
-  let convo = `User: ${request}`;
-  for (let round = 0; round < 4; round++) {
+  // The AI drives the UI: each turn it returns a control to render (pick / multi
+  // / input) or the final settings. Start with a kickoff so the first screen is
+  // an AI-chosen menu, not an empty input box.
+  let convo = "User just opened the configuration assistant (no request yet).";
+  for (let round = 0; round < 6; round++) {
     const raw = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Kokoro Speak: thinking…" },
       () =>
@@ -301,23 +295,60 @@ async function configure() {
       vscode.window.showErrorMessage("Kokoro Speak: couldn't parse the configuration response.");
       return;
     }
-    if (typeof obj.ask === "string" && !obj.settings) {
-      const answer = await vscode.window.showInputBox({
-        title: "Kokoro Speak — Configure",
-        prompt: obj.ask,
-        ignoreFocusOut: true,
-      });
-      if (answer === undefined) return;
-      convo += `\nAssistant: ${obj.ask}\nUser: ${answer}`;
-      continue;
-    }
+
     if (obj.settings && typeof obj.settings === "object") {
       await applySettings(obj.settings, typeof obj.summary === "string" ? obj.summary : "");
       return;
     }
-    return;
+
+    const ask = normalizeAsk(obj.ask);
+    if (!ask) return;
+    const answer = await renderAsk(ask);
+    if (answer === undefined) return; // user cancelled
+    convo += `\nAssistant asked: ${ask.prompt}\nUser answered: ${answer}`;
   }
-  vscode.window.showInformationMessage("Kokoro Speak: configuration didn't converge — try rephrasing.");
+  vscode.window.showInformationMessage(
+    "Kokoro Speak: configuration didn't converge — try again and be more specific."
+  );
+}
+
+type Ask = { kind: "input" | "pick" | "multi"; prompt: string; options?: string[]; placeholder?: string };
+
+/** Accept the AI's ask spec (object) or a bare string (treated as free text). */
+function normalizeAsk(ask: any): Ask | null {
+  if (typeof ask === "string") return { kind: "input", prompt: ask };
+  if (ask && typeof ask.prompt === "string") {
+    const kind = ask.kind === "pick" || ask.kind === "multi" ? ask.kind : "input";
+    return { kind, prompt: ask.prompt, options: ask.options, placeholder: ask.placeholder };
+  }
+  return null;
+}
+
+/** Render the AI-chosen control natively; returns the answer or undefined if cancelled. */
+async function renderAsk(ask: Ask): Promise<string | undefined> {
+  if (ask.kind === "pick" && ask.options?.length) {
+    const pick = await vscode.window.showQuickPick(ask.options, {
+      title: "Kokoro Speak — Configure",
+      placeHolder: ask.prompt,
+      ignoreFocusOut: true,
+    });
+    return pick;
+  }
+  if (ask.kind === "multi" && ask.options?.length) {
+    const picks = await vscode.window.showQuickPick(ask.options, {
+      title: "Kokoro Speak — Configure",
+      placeHolder: ask.prompt,
+      canPickMany: true,
+      ignoreFocusOut: true,
+    });
+    return picks ? picks.join(", ") : undefined;
+  }
+  return vscode.window.showInputBox({
+    title: "Kokoro Speak — Configure",
+    prompt: ask.prompt,
+    placeHolder: ask.placeholder,
+    ignoreFocusOut: true,
+  });
 }
 
 async function applySettings(settings: Record<string, unknown>, summary: string) {

@@ -66,11 +66,16 @@ Customize per user (User settings) or per repo (`.vscode/settings.json`):
 
 The status-bar tooltip has a **⚙ Config** link (also `Kokoro Speak: Configure
 Normalization (AI)`). It reads [skills/normalization-config.md](skills/normalization-config.md)
-— an editable instruction file — and runs the same LLM backend to turn a
-plain-language request ("offline only", "say K8s as Kubernetes", "use codex")
-into the right settings, asking a clarifying question only if needed, then
-applying the change after you confirm. Update the `.md` to change how it behaves;
-no code change required. Falls back to the Settings UI if no backend is available.
+— an editable instruction file — and runs the same LLM backend.
+
+The **AI chooses the UI on the fly**: each turn it returns a control to render,
+and the extension shows it natively — a quick-pick (choose one), a multi-select
+quick-pick (choose several), or an input box (free text). It opens with a pick
+menu of common actions, asks follow-ups as needed, then proposes settings you
+confirm before they're applied (to workspace settings if a folder is open, else
+user settings). Update the `.md` to change the menu, the questions, or how
+requests map to settings — no code change. Falls back to the Settings UI if no
+backend is available.
 
 ## Verification
 
