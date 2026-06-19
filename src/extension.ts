@@ -488,7 +488,7 @@ function writeTemp(wav: Buffer): string {
 function setStatus(phase: Phase, detail?: string) {
   if (!status) return;
   const map: Record<Phase, { icon: string; label: string }> = {
-    idle: { icon: "unmute", label: "Kokoro" },
+    idle: { icon: "unmute", label: "Kokoro TTS" },
     loading: { icon: "loading~spin", label: "Loading model" },
     synthesizing: { icon: "loading~spin", label: "Synthesizing" },
     speaking: { icon: "debug-pause", label: "Speaking" },
@@ -502,15 +502,19 @@ function setStatus(phase: Phase, detail?: string) {
   const active = phase === "speaking" || phase === "paused";
   const tip = new vscode.MarkdownString(undefined, true);
   tip.isTrusted = true;
-  tip.appendMarkdown("**Kokoro Speak** — left-click to stop\n\n");
+  tip.appendMarkdown("**Kokoro TTS**\n\n");
+  // Primary hover action: speak whatever's on the clipboard (works from the
+  // Claude Code panel, Markdown preview, anywhere — copy, then click).
+  tip.appendMarkdown("[$(play) Speak clipboard](command:kokoroSpeak.speakClipboard)");
   if (active) {
-    const pl = phase === "paused" ? "$(play) Resume" : "$(debug-pause) Pause";
-    tip.appendMarkdown(`[${pl}](command:kokoroSpeak.pause) · `);
+    const pl = phase === "paused" ? "$(debug-continue) Resume" : "$(debug-pause) Pause";
+    tip.appendMarkdown(` · [${pl}](command:kokoroSpeak.pause)`);
   }
   tip.appendMarkdown(
-    "[$(debug-stop) Stop](command:kokoroSpeak.stop) · " +
-      "[$(gear) Config](command:kokoroSpeak.configure)"
+    " · [$(debug-stop) Stop](command:kokoroSpeak.stop)" +
+      " · [$(gear) Config](command:kokoroSpeak.configure)"
   );
+  tip.appendMarkdown("\n\n_Left-click the item to stop._");
   status.tooltip = tip;
   status.show();
 }
