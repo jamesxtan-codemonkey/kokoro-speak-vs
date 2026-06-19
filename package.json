@@ -179,7 +179,7 @@
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --minify --outfile=dist/extension.js",
     "package": "vsce package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {

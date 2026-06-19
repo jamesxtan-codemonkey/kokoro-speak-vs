@@ -6,6 +6,7 @@ media/ort/
 test/browsertest.js
 test/main-stub.js
 test/.normalize.cjs
+test/.textprep.cjs
 out/
 out.log
 *.vsix
