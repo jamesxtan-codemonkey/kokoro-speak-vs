@@ -41,6 +41,7 @@ Rules:
 | `kokoroSpeak.normalization.mode` | `"off"` \| `"deterministic"` \| `"ai"` | off = none; deterministic = local rules (offline, instant); ai = an LLM applies the rules below |
 | `kokoroSpeak.normalization.rules` | string (natural language) | The rules `ai` mode applies. When the user wants new spoken-form behavior, append a clear bullet line to the existing rules rather than discarding them. |
 | `kokoroSpeak.normalization.replacements` | array of objects | Literal/regex substitutions applied in EVERY mode (incl. offline). Each item is `{"from":"K8s","to":"Kubernetes"}` (literal) or `{"pattern":"\\bWIP\\b","replacement":"work in progress","flags":"g"}` (regex). When adding one, return the FULL new array (existing + new). |
+| `kokoroSpeak.normalization.spellOut` | array of strings | Acronyms to read letter-by-letter, e.g. `["API","LFP"]` → "A P I". Use this when the user wants an acronym spelled out. Return the FULL new array (existing + new). |
 | `kokoroSpeak.normalization.backend` | `"auto"` \| `"cli"` \| `"api"` | For `ai`: auto-detect a local CLI, force a CLI, or use the Claude API |
 | `kokoroSpeak.normalization.command` | string | CLI for `backend:"cli"`, e.g. `"claude"` or `"codex"` |
 | `kokoroSpeak.normalization.model` | string | Model id for `backend:"api"` (e.g. `"claude-haiku-4-5"`) |
@@ -55,7 +56,10 @@ Rules:
   `backend: "api"` (and tell them in `summary` to run "Set Normalization API Key").
 - A pronunciation/expansion request for a specific term ("read K8s as Kubernetes",
   "say API as A P I") → add a `replacements` entry (return the full array).
-- A general spoken-style preference ("spell out years", "expand all acronyms") →
+- "Spell out X / read X letter by letter" for a specific acronym → add it to
+  `spellOut` (return the full array). A general "spell out all acronyms" → append
+  a bullet to `rules`.
+- A general spoken-style preference ("spell out years", "say emoji names") →
   append a bullet to `rules`.
 - Keep `summary` to one sentence in plain language.
 
