@@ -13,7 +13,7 @@ test("deterministic: currency, percent, version, quarter, abbreviations", () => 
     ["$10B", "10 billion dollars"],
     ["$3.5M", "3.5 million dollars"],
     ["$10", "10 dollars"],
-    ["~50%", "about 50 percent"],
+    ["~50%", "approximate 50 percent"],
     ["50%", "50 percent"],
     ["v1.2.3", "version 1 point 2 point 3"],
     ["Q4 2025", "fourth quarter 2025"],
@@ -24,6 +24,21 @@ test("deterministic: currency, percent, version, quarter, abbreviations", () => 
     assert.equal(N.deterministic(input), expected, `for "${input}"`);
   }
   assert.equal(N.deterministic("e.g. this"), "for example this");
+});
+
+test("deterministic: tilde, ranges, arrows, asterisks, check marks", () => {
+  const cases = [
+    ["~5–20%", "approximate 5 to 20 percent"], // tilde + range + percent (en dash)
+    ["~100 events", "approximate 100 events"],
+    ["A → C", "A to C"],
+    ["step 1 -> step 2", "step 1 to step 2"],
+    ["**bold** and *italic*", "bold and italic"], // no "asterisk"
+    ["✅ done", "check done"],
+    ["build ✅", "build check"],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(N.deterministic(input), expected, `for "${input}"`);
+  }
 });
 
 test("gate: hasCandidates", () => {
