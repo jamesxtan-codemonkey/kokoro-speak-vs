@@ -1,0 +1,44 @@
+{
+  "name": "kokoro-speak-vs",
+  "displayName": "Kokoro Speak",
+  "description": "Read text aloud in any editor using the open-weight Kokoro 82M TTS model.",
+  "version": "0.0.1",
+  "publisher": "jamesxtan",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "kokoroSpeak.speakHello",
+        "title": "Kokoro Speak: Speak Hello (M1 spike)"
+      }
+    ]
+  },
+  "scripts": {
+    "spike": "node scripts/spike.mjs",
+    "build:ext": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --outfile=dist/extension.js",
+    "build:webview": "esbuild webview/main.ts --bundle --platform=browser --format=esm --outfile=media/main.js",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run build:ext && npm run build:webview",
+    "watch": "npm run build -- --watch"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.21.0": true,
+    "esbuild@0.23.1": true
+  }
+}

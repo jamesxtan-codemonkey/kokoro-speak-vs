@@ -1,0 +1,11 @@
+node_modules/
+dist/
+media/main.js
+media/main.js.map
+test/browsertest.js
+out/
+out.log
+*.vsix
+.DS_Store
+.gstack/
+**/.gstack/
