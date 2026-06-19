@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Mirrors the extension CSP: script-src allows ONLY same-origin (no CDN),
+       so if ORT tried to import its loader from jsdelivr it would fail exactly
+       like it did in VS Code. Local ORT (data-ort-base below) must satisfy it. -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'none';
+    script-src 'self' 'wasm-unsafe-eval' blob:;
+    worker-src 'self' blob:;
+    connect-src 'self' https: data: blob:;
+    style-src 'self' 'unsafe-inline';
+    media-src 'self' blob: data:;
+    img-src 'self' data:;
+  " />
+  <title>Kokoro CSP harness</title>
+</head>
+<body data-ort-base="http://localhost:8731/media/ort/">
+  <p id="state">idle</p>
+  <div class="row">
+    <button id="pause" disabled>Pause</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+  <div id="log"></div>
+  <script src="/test/cspstub.js"></script>
+  <script type="module" src="/media/main.js"></script>
+</body>
+</html>

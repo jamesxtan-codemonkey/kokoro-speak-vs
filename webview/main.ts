@@ -3,9 +3,21 @@
 // bar stays in sync. Inference in the webview, host orchestrates.
 
 import { KokoroTTS } from "kokoro-js";
+import { env } from "@huggingface/transformers";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
+
+// Serve the ONNX-Runtime-Web wasm/loader from the extension (set by the host on
+// <body data-ort-base>), not the jsdelivr CDN the webview CSP blocks. Single
+// thread: webviews aren't cross-origin isolated, so SharedArrayBuffer/worker
+// threading is unavailable anyway.
+const ortWasm = env.backends?.onnx?.wasm;
+if (ortWasm) {
+  const ortBase = document.body.dataset.ortBase;
+  if (ortBase) ortWasm.wasmPaths = ortBase;
+  ortWasm.numThreads = 1;
+}
 
 const stateEl = document.getElementById("state")!;
 const logEl = document.getElementById("log")!;

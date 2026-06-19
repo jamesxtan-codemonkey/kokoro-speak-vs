@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { getSpeakableText } from "./textprep";
 
 // M2 host: editor integration. Commands capture text from the active editor and
 // drive a hidden-ish webview that runs Kokoro (WASM) and plays audio. A status
@@ -42,22 +43,25 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("kokoroSpeak.speakSelection", () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        vscode.window.showInformationMessage("Kokoro Speak: no active editor.");
+      const src = resolveSource();
+      if (!src) {
+        vscode.window.showInformationMessage(
+          "Kokoro Speak: open a text file or Markdown document to speak."
+        );
         return;
       }
-      const sel = editor.selection;
-      // Empty selection → fall back to the whole document.
-      const text = sel.isEmpty
-        ? editor.document.getText()
-        : editor.document.getText(sel);
-      speak(text);
+      speak(getSpeakableText(src.document.languageId, src.text));
     }),
 
     vscode.commands.registerCommand("kokoroSpeak.speakDocument", () => {
-      const editor = vscode.window.activeTextEditor;
-      speak(editor?.document.getText());
+      const src = resolveSource({ wholeOnly: true });
+      if (!src) {
+        vscode.window.showInformationMessage(
+          "Kokoro Speak: open a text file or Markdown document to speak."
+        );
+        return;
+      }
+      speak(getSpeakableText(src.document.languageId, src.text));
     }),
 
     vscode.commands.registerCommand("kokoroSpeak.pause", () => {
@@ -77,6 +81,36 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   panel?.dispose();
+}
+
+/**
+ * Resolve what to speak. Normally the active editor's selection (or whole doc).
+ * When focus is in a webview such as the Markdown preview there is no active
+ * text editor, so fall back to the underlying document — preferring a visible
+ * Markdown doc, then any open file-backed text document.
+ */
+function resolveSource(opts?: {
+  wholeOnly?: boolean;
+}): { document: vscode.TextDocument; text: string } | undefined {
+  const active = vscode.window.activeTextEditor;
+  if (active) {
+    if (!opts?.wholeOnly && !active.selection.isEmpty) {
+      return {
+        document: active.document,
+        text: active.document.getText(active.selection),
+      };
+    }
+    return { document: active.document, text: active.document.getText() };
+  }
+
+  const candidates = [
+    ...vscode.window.visibleTextEditors.map((e) => e.document),
+    ...vscode.workspace.textDocuments,
+  ].filter((d) => !d.isUntitled && d.uri.scheme === "file");
+
+  const doc =
+    candidates.find((d) => d.languageId === "markdown") ?? candidates[0];
+  return doc ? { document: doc, text: doc.getText() } : undefined;
 }
 
 function ensurePanel(context: vscode.ExtensionContext) {
@@ -109,7 +143,13 @@ function ensurePanel(context: vscode.ExtensionContext) {
   const mainUri = panel.webview.asWebviewUri(
     vscode.Uri.joinPath(mediaRoot, "main.js")
   );
-  panel.webview.html = getHtml(panel.webview, mainUri);
+  // Local ONNX-Runtime-Web assets, so the webview never hits the jsdelivr CDN
+  // (which its CSP blocks). Trailing slash: transformers.js appends filenames.
+  const ortBase =
+    panel.webview
+      .asWebviewUri(vscode.Uri.joinPath(mediaRoot, "ort"))
+      .toString() + "/";
+  panel.webview.html = getHtml(panel.webview, mainUri, ortBase);
 }
 
 function setStatus(state: PlaybackState, detail?: string) {
@@ -132,13 +172,18 @@ function setStatus(state: PlaybackState, detail?: string) {
   status.show();
 }
 
-function getHtml(webview: vscode.Webview, mainUri: vscode.Uri): string {
+function getHtml(
+  webview: vscode.Webview,
+  mainUri: vscode.Uri,
+  ortBase: string
+): string {
   const csp = [
     `default-src 'none'`,
+    // Local ORT loader .mjs is imported from the extension (cspSource).
     `script-src ${webview.cspSource} 'wasm-unsafe-eval' blob:`,
     `worker-src ${webview.cspSource} blob:`,
-    // Model weights + ORT wasm are fetched from huggingface.co / CDN.
-    `connect-src https: data: blob:`,
+    // Local ORT .wasm (cspSource) + model weights from huggingface.co (https:).
+    `connect-src ${webview.cspSource} https: data: blob:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `media-src ${webview.cspSource} blob: data:`,
     `img-src ${webview.cspSource} data:`,
@@ -153,6 +198,7 @@ function getHtml(webview: vscode.Webview, mainUri: vscode.Uri): string {
   <title>Kokoro Speak</title>
   <style>
     body { font-family: var(--vscode-font-family); padding: 1rem; }
+    /* (ort base passed via body data attribute below) */
     .row { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; }
     button { font: inherit; padding: .3rem .8rem; cursor: pointer; }
     button:disabled { opacity: .5; cursor: default; }
@@ -160,7 +206,7 @@ function getHtml(webview: vscode.Webview, mainUri: vscode.Uri): string {
            font-size: 12px; opacity: 0.8; margin-top: 1rem; }
   </style>
 </head>
-<body>
+<body data-ort-base="${ortBase}">
   <div class="row"><strong>Kokoro Speak</strong></div>
   <p id="state">Idle.</p>
   <div class="row">

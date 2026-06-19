@@ -47,6 +47,24 @@ synthesis** (generation token prevents a cancelled request from ever playing).
 > `code` CLI here). The headless browser test exercises the webview's synthesis +
 > playback state machine, which is the substantive part.
 
+### Webview fixes (after first real install)
+
+Two issues only the real VS Code webview surfaced, now fixed and re-verified
+headless under a CSP that mirrors the extension's:
+
+- **ONNX-Runtime-Web load failed under CSP.** transformers.js dynamically imports
+  its wasm loader from the jsdelivr CDN, which the webview `script-src` blocks
+  ("no available backend found"). Fixed by **hosting ORT locally**: `npm run
+  copy:ort` copies `ort-wasm-simd-threaded.jsep.{mjs,wasm}` into `media/ort/`,
+  the host injects that URI via `<body data-ort-base>`, and the webview points
+  `env.backends.onnx.wasm.wasmPaths` there (single-threaded — webviews aren't
+  cross-origin isolated). No CDN, works offline once the model is cached.
+- **Markdown preview did nothing.** A preview pane is a webview, not a text
+  editor, so the keybinding's `editorTextFocus` clause never fired and
+  `activeTextEditor` was undefined. Fixed: dropped the `when` clause and added a
+  fallback that speaks the underlying document, stripping Markdown syntax first
+  (`src/textprep.ts`) so it doesn't read "hash" / "asterisk" aloud.
+
 ## Layout
 
 | Path                   | What                                                         |

@@ -1,0 +1,18 @@
+# Everything not needed at runtime. Both dist/extension.js and media/main.js are
+# self-contained esbuild bundles, so source and node_modules are excluded.
+.vscode/**
+node_modules/**
+src/**
+webview/**
+scripts/**
+test/**
+out/**
+out.log
+.gitignore
+.vscodeignore
+tsconfig.json
+package-lock.json
+REQUIREMENTS.md
+**/*.map
+**/.DS_Store
+**/.gstack/**

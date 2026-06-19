@@ -10,6 +10,11 @@
   "categories": [
     "Other"
   ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamesxtan-codemonkey/kokoro-speak-vs.git"
+  },
   "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {
@@ -44,8 +49,7 @@
       {
         "command": "kokoroSpeak.speakSelection",
         "key": "ctrl+alt+s",
-        "mac": "cmd+alt+s",
-        "when": "editorTextFocus"
+        "mac": "cmd+alt+s"
       },
       {
         "command": "kokoroSpeak.pause",
@@ -72,8 +76,13 @@
     "spike": "node scripts/spike.mjs",
     "build:ext": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --outfile=dist/extension.js",
     "build:webview": "esbuild webview/main.ts --bundle --platform=browser --format=esm --outfile=media/main.js",
+    "copy:ort": "node scripts/copy-ort.mjs",
     "typecheck": "tsc --noEmit",
-    "build": "npm run build:ext && npm run build:webview",
+    "build": "npm run build:ext && npm run build:webview && npm run copy:ort",
+    "build:ext:min": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --minify --outfile=dist/extension.js",
+    "build:webview:min": "esbuild webview/main.ts --bundle --platform=browser --format=esm --minify --outfile=media/main.js",
+    "vscode:prepublish": "npm run build:ext:min && npm run build:webview:min && npm run copy:ort",
+    "package": "vsce package --no-dependencies",
     "watch": "npm run build -- --watch",
     "test": "node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
