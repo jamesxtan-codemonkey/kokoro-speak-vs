@@ -37,22 +37,25 @@ Design pillars:
 
 ## 4. Architecture
 
-### 4.1 Recommended runtime — kokoro-js (in-process ONNX/WASM)
+### 4.1 Runtime — kokoro-js in the host (onnxruntime-node)
 
-**Decision:** Use the [`kokoro-js`](https://www.npmjs.com/package/kokoro-js)
-library (Transformers.js + ONNX Runtime) as the default inference path.
+**Decision (current):** Run [`kokoro-js`](https://www.npmjs.com/package/kokoro-js)
+in the **extension host** via `onnxruntime-node` (`device: "cpu"`), ~3x realtime.
 
-Rationale:
+We first ran it in a **webview** (ONNX-Runtime-Web, WASM) to keep the VSIX small
+and avoid native binaries. That worked but had two compounding problems: WASM was
+single-threaded (~0.7x realtime), and webview audio hit Chromium's autoplay rule.
+Moving inference to the host fixed both — synthesis is ~4x faster (so buffering
+the whole selection for gapless playback is quick), and there's no webview, CSP,
+or autoplay gesture.
 
-- Pure JavaScript/WASM — **no Python dependency**, no separate install step.
-- Model + voices download once (quantized ONNX ≈ 80–90 MB at `q8`), then cached
-  on disk for fully offline synthesis.
-- Built-in grapheme-to-phoneme (g2p), so we don't ship a separate phonemizer.
-- Ships inside the VSIX and runs anywhere VS Code runs.
+Trade-off: the host path bundles native binaries (`onnxruntime-node`), so the
+VSIX is large (~300 MB) and platform-specific (see §11). Local/F5 use is
+unaffected; model weights (≈ 80–90 MB at `q8`) still download once and cache.
 
-Trade-off vs. a Python sidecar: somewhat slower cold start and inference than
-native PyTorch, but the install simplicity is worth it for v1. The Python
-sidecar is documented below as an **optional performance mode** for later.
+ESM note: kokoro-js is ESM-only and the host bundle is CommonJS, so it's loaded
+with a real dynamic `import()` (hidden from esbuild) to dodge `ERR_REQUIRE_ESM`
+on the Node inside VS Code.
 
 ### 4.2 Process / component layout
 
@@ -63,37 +66,26 @@ sidecar is documented below as an **optional performance mode** for later.
 └───────────────────────────┼──────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Extension Host (Node.js)                                     │
+│ Extension Host (Node.js) — everything runs here              │
 │  1. Capture text (selection / document; de-markdown)         │
 │  2. [planned] Normalization agent → speech-friendly text     │
-│  3. Post text to the webview; receive WAV chunks back        │
-│  4. Play chunks in order via the OS audio player             │
+│  3. kokoro-js synth (onnxruntime-node): stream sentences,    │
+│     concatenate into gapless WAV segment(s)                  │
+│  4. Play segments in order via the OS audio player           │
 │     (afplay / paplay·aplay·ffplay / PowerShell);             │
 │     pause = SIGSTOP/SIGCONT, stop = kill                     │
-└───────────────┬─────────────────────────────▲────────────────┘
-        text     │                             │  WAV chunks (base64)
-                 ▼                             │
-┌─────────────────────────────────────────────────────────────┐
-│ Webview (browser env) — synthesis worker                     │
-│  - kokoro-js inference (ONNX-Runtime-Web, WASM, 1 thread)    │
-│  - local ORT assets (no CDN); model weights cached from HF   │
-│  - tts.stream(): emits one WAV per sentence                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 Notes:
 
-- **Playback runs in the host**, not the webview. Node can't play audio with a
-  built-in API, so the host shells out to the **OS audio player**. This was a
-  deliberate change after testing: playing in the webview hit Chromium's
-  autoplay-gesture rule and forced focus juggling that broke editor selection
-  capture. With the webview as a pure **synthesis worker**, none of that applies.
-- Synthesis is **streamed sentence-by-sentence**. Kokoro has a ~510-token context
-  limit, so a single call would silently truncate long text; streaming also lets
-  the host play the first sentence while the rest synthesize.
-- The webview runs single-threaded (webviews aren't cross-origin isolated, so
-  SharedArrayBuffer threading is unavailable) and loads ORT locally (its CSP
-  blocks the jsdelivr CDN that transformers.js defaults to).
+- **No webview.** Synthesis and playback both run in the host.
+- Text is split into sentences (Kokoro's ~510-token limit would otherwise
+  truncate), then **concatenated into one gapless WAV** so there's a single
+  OS-player launch (each launch costs ~0.85 s — the source of per-sentence gaps).
+  `bufferSeconds` tunes how much to buffer before playback (§7).
+- Synthesis at ~3x realtime keeps the time-to-first-audio low even though we
+  buffer for gaplessness (e.g. a 40 s clip ≈ 13 s synth, then gapless).
 
 ### 4.3 Optional performance mode — Python sidecar (future)
 
@@ -284,21 +276,29 @@ output) and stripped of any prose/markdown wrapping before synthesis.
 
 ## 11. Packaging & distribution
 
-- Published to the VS Code Marketplace as a standard VSIX.
-- Model weights are **downloaded on first use** (not bundled) to keep the VSIX
-  small; cached under global storage (decided, §12-B).
+- Host inference bundles **native binaries** (`onnxruntime-node`) plus
+  `@huggingface/transformers`, so a single-platform VSIX is **~300 MB**. For
+  Marketplace distribution this needs **per-platform targets**
+  (`vsce package --target <platform>`) and trimming other-platform binaries /
+  unused ORT-web assets. **Open issue.**
+- Local development/use is via **F5** (deps resolve from `node_modules`), which is
+  unaffected by the VSIX size.
+- Model weights are **downloaded on first use** (not bundled), cached under the
+  HuggingFace cache dir.
 - License compliance: Kokoro is Apache-2.0; attribute the model + kokoro-js.
 
 ## 12. Decisions & open questions
 
 Resolved:
 
-- **A. Inference location → webview; playback → host.** The webview synthesizes
-  (WASM); the host plays via the OS audio player. Originally "play in the webview
-  too", changed after testing surfaced the autoplay-gesture + focus problems.
-- **B. Model delivery → download-on-first-use** (small VSIX, cached after). The
-  ORT *runtime* is bundled locally (CSP blocks the CDN); only model weights
-  download.
+- **A. Inference + playback → host (final).** Both run in the extension host:
+  kokoro-js via `onnxruntime-node` for synthesis, the OS audio player for output.
+  Evolution: webview Web-Audio → host playback + webview synthesis → all-host
+  (this) — each step removed a class of problem (autoplay, focus, then WASM speed
+  and the panel itself).
+- **B. Model delivery → download-on-first-use**, cached after. With host
+  inference the *runtime* ships in the VSIX as native binaries (large; §11);
+  model weights still download once.
 - **C. Highlighting → sentence-level** for v1 (word-level needs Kokoro timestamps).
 - **D. Normalization backend → pluggable, CLI-agent default** (§6.6). Reuses an
   installed `claude`/`codex` CLI's auth so there's no API key to manage; `api`

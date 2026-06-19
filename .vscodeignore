@@ -1,18 +1,34 @@
-# Everything not needed at runtime. Both dist/extension.js and media/main.js are
-# self-contained esbuild bundles, so source and node_modules are excluded.
+# Source + tooling not needed at runtime. dist/extension.js is the bundled host;
+# runtime deps (kokoro-js, @huggingface/transformers, onnxruntime-node, sharp)
+# are included from node_modules by vsce (NOT excluded here).
 .vscode/**
-node_modules/**
 src/**
 webview/**
 scripts/**
 test/**
+media/**
 out/**
 out.log
 .gitignore
 .vscodeignore
 tsconfig.json
-package-lock.json
 REQUIREMENTS.md
 **/*.map
 **/.DS_Store
 **/.gstack/**
+
+# Trim native binaries for other platforms — this VSIX targets the local one.
+# (For multi-platform publishing, build per-target VSIXs instead.)
+node_modules/onnxruntime-node/bin/napi-v3/linux/**
+node_modules/onnxruntime-node/bin/napi-v3/win32/**
+node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**
+
+# Prune obvious dev weight from the bundled dependency tree.
+node_modules/**/*.md
+node_modules/**/*.map
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/example/**
+node_modules/**/examples/**
+node_modules/**/docs/**
+node_modules/.bin/**

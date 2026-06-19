@@ -110,15 +110,10 @@
   },
   "scripts": {
     "spike": "node scripts/spike.mjs",
-    "build:ext": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --outfile=dist/extension.js",
-    "build:webview": "esbuild webview/main.ts --bundle --platform=browser --format=esm --outfile=media/main.js",
-    "copy:ort": "node scripts/copy-ort.mjs",
+    "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --outfile=dist/extension.js",
     "typecheck": "tsc --noEmit",
-    "build": "npm run build:ext && npm run build:webview && npm run copy:ort",
-    "build:ext:min": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --minify --outfile=dist/extension.js",
-    "build:webview:min": "esbuild webview/main.ts --bundle --platform=browser --format=esm --minify --outfile=media/main.js",
-    "vscode:prepublish": "npm run build:ext:min && npm run build:webview:min && npm run copy:ort",
-    "package": "vsce package --no-dependencies",
+    "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --minify --outfile=dist/extension.js",
+    "package": "vsce package",
     "watch": "npm run build -- --watch",
     "test": "node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
