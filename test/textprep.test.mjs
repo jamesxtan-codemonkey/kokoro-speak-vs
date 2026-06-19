@@ -31,3 +31,13 @@ test("strips headings, bold, italic, links, code", () => {
   );
   assert.equal(out, "Title\n\nA bold and italic word, a link, and code.");
 });
+
+test("heading on a line is not merged with the next line", () => {
+  // single newline after heading would otherwise unwrap into one line
+  assert.equal(
+    stripMarkdown("## The Assignment\nRecruit a clinic\nand ask one question."),
+    "The Assignment\n\nRecruit a clinic and ask one question."
+  );
+  assert.equal(stripMarkdown("# H1\ntext"), "H1\n\ntext");
+  assert.equal(stripMarkdown("### Done ###\nnext"), "Done\n\nnext");
+});

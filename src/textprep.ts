@@ -10,13 +10,17 @@ export function stripMarkdown(md: string): string {
   // Fenced code blocks (``` and ~~~) — drop entirely.
   s = s.replace(/```[\s\S]*?```/g, " ");
   s = s.replace(/~~~[\s\S]*?~~~/g, " ");
-  // Headings, blockquotes, list markers at line start.
-  s = s.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+  // Headings: drop the marker (and any closing #'s) AND isolate the heading as
+  // its own paragraph, so it isn't merged into the next line by the soft-break
+  // unwrap below — a heading is spoken as its own phrase, with a pause.
+  s = s.replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm, "\n\n$1\n\n");
+  // Blockquotes, list markers at line start.
   s = s.replace(/^\s{0,3}>\s?/gm, "");
   s = s.replace(/^\s*([-*+]|\d+[.)])\s+/gm, "");
-  // Horizontal rules and table separator rows → blank.
-  s = s.replace(/^\s{0,3}([-*_] ?){3,}\s*$/gm, " ");
-  s = s.replace(/^\s*\|?[-:\s|]+\|?\s*$/gm, " ");
+  // Horizontal rules and table separator rows → blank. Use [ \t] (not \s, which
+  // includes newlines and would swallow blank-line paragraph breaks).
+  s = s.replace(/^[ \t]{0,3}([-*_] ?){3,}[ \t]*$/gm, " ");
+  s = s.replace(/^[ \t]*\|?[-:| \t]+\|?[ \t]*$/gm, " ");
   s = s.replace(/\|/g, " ");
 
   // --- unwrap soft line breaks ---
