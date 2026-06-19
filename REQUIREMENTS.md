@@ -64,29 +64,36 @@ sidecar is documented below as an **optional performance mode** for later.
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Extension Host (Node.js)                                     │
-│  1. Capture text + split into sentences                      │
-│  2. Normalization agent  ── Claude API ──► normalized text   │
-│     (with cache + deterministic fallback)                    │
-│  3. Drive synthesis (kokoro-js)                              │
-└───────────────────────────┬──────────────────────────────────┘
-                            ▼  audio (WAV/PCM) + sentence spans
+│  1. Capture text (selection / document; de-markdown)         │
+│  2. [planned] Normalization agent → speech-friendly text     │
+│  3. Post text to the webview; receive WAV chunks back        │
+│  4. Play chunks in order via the OS audio player             │
+│     (afplay / paplay·aplay·ffplay / PowerShell);             │
+│     pause = SIGSTOP/SIGCONT, stop = kill                     │
+└───────────────┬─────────────────────────────▲────────────────┘
+        text     │                             │  WAV chunks (base64)
+                 ▼                             │
 ┌─────────────────────────────────────────────────────────────┐
-│ Hidden Webview (browser env)                                 │
-│  - kokoro-js inference (WASM SIMD/threads)  *or* extension-  │
-│    host inference via onnxruntime-node                       │
-│  - Web Audio playback, play/pause/stop, progress events      │
+│ Webview (browser env) — synthesis worker                     │
+│  - kokoro-js inference (ONNX-Runtime-Web, WASM, 1 thread)    │
+│  - local ORT assets (no CDN); model weights cached from HF   │
+│  - tts.stream(): emits one WAV per sentence                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 Notes:
 
-- The extension host (Node) **cannot play audio directly**; a **webview** hosts
-  the `<audio>` / Web Audio playback. Open question §12-A: run inference in the
-  webview (better WASM threading) vs. in the host via `onnxruntime-node` and
-  stream PCM to the webview. Default plan: **inference in the webview**, host
-  orchestrates.
-- Synthesis is **streamed sentence-by-sentence** so playback starts before the
-  whole document is synthesized.
+- **Playback runs in the host**, not the webview. Node can't play audio with a
+  built-in API, so the host shells out to the **OS audio player**. This was a
+  deliberate change after testing: playing in the webview hit Chromium's
+  autoplay-gesture rule and forced focus juggling that broke editor selection
+  capture. With the webview as a pure **synthesis worker**, none of that applies.
+- Synthesis is **streamed sentence-by-sentence**. Kokoro has a ~510-token context
+  limit, so a single call would silently truncate long text; streaming also lets
+  the host play the first sentence while the rest synthesize.
+- The webview runs single-threaded (webviews aren't cross-origin isolated, so
+  SharedArrayBuffer threading is unavailable) and loads ORT locally (its CSP
+  blocks the jsdelivr CDN that transformers.js defaults to).
 
 ### 4.3 Optional performance mode — Python sidecar (future)
 
@@ -286,8 +293,12 @@ output) and stripped of any prose/markdown wrapping before synthesis.
 
 Resolved:
 
-- **A. Inference location → webview** (better WASM threading); host orchestrates.
-- **B. Model delivery → download-on-first-use** (small VSIX, cached after).
+- **A. Inference location → webview; playback → host.** The webview synthesizes
+  (WASM); the host plays via the OS audio player. Originally "play in the webview
+  too", changed after testing surfaced the autoplay-gesture + focus problems.
+- **B. Model delivery → download-on-first-use** (small VSIX, cached after). The
+  ORT *runtime* is bundled locally (CSP blocks the CDN); only model weights
+  download.
 - **C. Highlighting → sentence-level** for v1 (word-level needs Kokoro timestamps).
 - **D. Normalization backend → pluggable, CLI-agent default** (§6.6). Reuses an
   installed `claude`/`codex` CLI's auth so there's no API key to manage; `api`
@@ -305,11 +316,17 @@ Still open:
 
 ## 13. Milestones
 
-1. **M1 — Synthesis spike:** kokoro-js in a webview, speak a hardcoded string.
-2. **M2 — Editor integration:** speak selection/document, status bar, stop.
-3. **M3 — Deterministic normalization:** offline rule engine + gating.
-4. **M4 — LLM normalization agent:** pluggable backends (CLI-agent default with
+1. **M1 — Synthesis spike** ✅ kokoro-js in a webview, speak a hardcoded string.
+2. **M2 — Editor integration** ✅ speak selection/document, status bar, stop,
+   context menu; host-side playback via the OS audio player.
+3. **M5 — Streaming playback** ✅ (partial) `tts.stream()` sentence chunks played
+   in order so long text isn't truncated and audio starts early. Remaining for
+   M5: **sentence highlighting** in the editor.
+4. **M6 — Settings & voices** ✅ (partial) `kokoroSpeak.voice` + `kokoroSpeak.speed`
+   settings and a **Select Voice** picker. Remaining: rules editor, secrets.
+5. **M3 — Deterministic normalization:** offline rule engine + gating.
+6. **M4 — LLM normalization agent:** pluggable backends (CLI-agent default with
    warm process + sandboxing, plus `api`), caching, opt-in, fallback.
-5. **M5 — Playback polish:** pause/resume, sentence highlighting, streaming.
-6. **M6 — Settings & voices:** voice picker, speed, rules editor, secrets.
-7. **M7 — Package & publish:** docs, attribution, Marketplace listing.
+7. **M5 (rest) — Sentence highlighting:** highlight the sentence being spoken.
+8. **M7 — Package & publish:** docs, attribution, Marketplace listing. (VSIX
+   packaging already in place — `npm run package`.)

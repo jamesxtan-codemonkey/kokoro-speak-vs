@@ -71,17 +71,30 @@ headless under a CSP that mirrors the extension's:
   audio** through the OS player (`afplay` / `paplay`·`aplay`·`ffplay` /
   PowerShell, `src/player.ts`). No autoplay gesture, the panel never needs focus
   so selection stays correct, and Pause/Stop map to process SIGSTOP/SIGCONT/kill.
+- **Long text was cut off mid-sentence.** Kokoro has a ~510-token context limit,
+  so a single `generate()` silently truncated long selections. Fixed with
+  **streaming**: the webview uses `tts.stream()` to emit one WAV per sentence and
+  the host plays them in a **queue** (`src/extension.ts`), so the first sentence
+  starts while the rest synthesize and nothing is dropped. A request-id guard
+  prevents a stale chunk from a superseded request leaking into the queue.
+
+### Settings (M6, partial)
+
+- `kokoroSpeak.voice` (28 Kokoro voices) and `kokoroSpeak.speed` (0.5–2.0), wired
+  through to `tts.stream()`. Plus a **Kokoro Speak: Select Voice** quick-pick.
 
 ## Layout
 
 | Path                   | What                                                         |
 |------------------------|-------------------------------------------------------------|
 | `scripts/spike.mjs`    | Node synthesis spike → writes `out/spike.wav`.              |
-| `src/extension.ts`     | Extension host: `Kokoro Speak: Speak Hello` command.        |
-| `webview/main.ts`      | Webview: loads Kokoro (WASM), synthesizes, plays audio.     |
-| `webview/browsertest.ts` + `test/harness.html` | Headless-browser check of the WASM inference path. |
-| `test/m2harness.html`  | Headless-browser harness for the M2 webview state machine.  |
+| `src/extension.ts`     | Extension host: commands, status bar, streaming play queue. |
+| `src/player.ts`        | OS audio player wrapper (play/pause/stop, fallback chain).   |
+| `src/textprep.ts`      | Markdown stripping (and future text normalization).          |
+| `webview/main.ts`      | Webview synthesis worker: Kokoro (WASM) → streamed WAV chunks.|
+| `scripts/copy-ort.mjs` | Copies ONNX-Runtime-Web assets into `media/ort/` for the VSIX.|
 | `test/roundtrip.test.mjs` + `test/lib/` | Round-trip TTS↔ASR verification (`npm test`). |
+| `test/*harness.html` + `test/stub-*.ts` | Headless-browser harnesses (WASM load, state machine). |
 
 ## Run it
 

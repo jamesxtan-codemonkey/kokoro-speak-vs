@@ -40,11 +40,41 @@
         "category": "Kokoro Speak"
       },
       {
+        "command": "kokoroSpeak.selectVoice",
+        "title": "Kokoro Speak: Select Voice",
+        "category": "Kokoro Speak"
+      },
+      {
         "command": "kokoroSpeak.speakHello",
         "title": "Kokoro Speak: Speak Hello (M1 spike)",
         "category": "Kokoro Speak"
       }
     ],
+    "configuration": {
+      "title": "Kokoro Speak",
+      "properties": {
+        "kokoroSpeak.voice": {
+          "type": "string",
+          "default": "af_heart",
+          "enum": [
+            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica",
+            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+            "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
+            "am_michael", "am_onyx", "am_puck", "am_santa",
+            "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+            "bm_daniel", "bm_fable", "bm_george", "bm_lewis"
+          ],
+          "description": "Kokoro voice (a=American, b=British; f=female, m=male)."
+        },
+        "kokoroSpeak.speed": {
+          "type": "number",
+          "default": 1.0,
+          "minimum": 0.5,
+          "maximum": 2.0,
+          "description": "Speaking rate multiplier (0.5–2.0)."
+        }
+      }
+    },
     "keybindings": [
       {
         "command": "kokoroSpeak.speakSelection",

@@ -37,4 +37,17 @@ export class KokoroTTS {
       toWav: () => encodeWav(samples, 24000),
     };
   }
+
+  // Mirror kokoro-js: split into "sentences" and yield one audio per chunk.
+  async *stream(text: string, _opts?: unknown) {
+    const parts = String(text).split(/(?<=[.!?])\s+/).filter(Boolean);
+    for (const part of parts.length ? parts : [text]) {
+      const samples = new Float32Array(2400);
+      yield {
+        text: part,
+        phonemes: "",
+        audio: { audio: samples, sampling_rate: 24000, toWav: () => encodeWav(samples, 24000) },
+      };
+    }
+  }
 }

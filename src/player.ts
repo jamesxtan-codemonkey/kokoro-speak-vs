@@ -36,30 +36,29 @@ export type PlayState = "speaking" | "paused" | "idle";
 export class AudioPlayer {
   private current: Handle | undefined;
 
-  /** Start playing `file`; `onDone` fires on natural finish (not on stop()). */
-  play(file: string, onDone: () => void): void {
+  /**
+   * Start playing `file`. `onDone` fires on natural finish (not on stop()).
+   * `onUnavailable` fires if no audio player could be launched.
+   */
+  play(file: string, onDone: () => void, onUnavailable?: () => void): void {
     this.stop();
     const chain = candidates(file);
 
     const tryAt = (i: number) => {
-      const next = chain[i];
-      if (!next) {
-        onDone();
-        return;
-      }
-      const [cmd, args] = next;
+      const [cmd, args] = chain[i];
       const proc = spawn(cmd, args, { stdio: "ignore" });
       const handle: Handle = { proc, paused: false };
       this.current = handle;
 
       proc.on("error", (err: NodeJS.ErrnoException) => {
         if (this.current !== handle) return;
-        // Player not installed → fall back to the next candidate.
+        // Player not installed → fall back to the next candidate, if any.
         if (err.code === "ENOENT" && i + 1 < chain.length) {
           tryAt(i + 1);
         } else {
           this.current = undefined;
-          onDone();
+          if (err.code === "ENOENT" && onUnavailable) onUnavailable();
+          else onDone();
         }
       });
       proc.on("exit", () => {

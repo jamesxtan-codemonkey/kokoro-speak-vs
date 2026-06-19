@@ -23,7 +23,16 @@ type Phase =
 let panel: vscode.WebviewPanel | undefined;
 let status: vscode.StatusBarItem;
 const player = new AudioPlayer();
-let tempFile: string | undefined;
+
+// Streaming playback: chunks arrive from the webview as they synthesize and play
+// in order. `queue` holds not-yet-played temp files; `current` is playing.
+let queue: string[] = [];
+let current: string | undefined;
+let playing = false;
+let synthDone = false;
+// Request id so chunks from a superseded/stopped request are ignored.
+let reqSeq = 0;
+let activeReq = 0;
 
 export function activate(context: vscode.ExtensionContext) {
   status = vscode.window.createStatusBarItem(
@@ -43,8 +52,19 @@ export function activate(context: vscode.ExtensionContext) {
     ensurePanel(context);
     // preserveFocus: keep the editor focused so selection stays intact.
     panel!.reveal(vscode.ViewColumn.Beside, true);
+    const cfg = vscode.workspace.getConfiguration("kokoroSpeak");
+    const voice = cfg.get<string>("voice", "af_heart");
+    const speed = cfg.get<number>("speed", 1.0);
+    resetPlayback();
+    activeReq = ++reqSeq;
     setStatus("synthesizing", `Synthesizing ${what}…`);
-    panel!.webview.postMessage({ type: "synthesize", text: trimmed });
+    panel!.webview.postMessage({
+      type: "synthesize",
+      text: trimmed,
+      voice,
+      speed,
+      reqId: activeReq,
+    });
   };
 
   context.subscriptions.push(
@@ -77,21 +97,52 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("kokoroSpeak.stop", () => {
-      player.stop();
+      activeReq = ++reqSeq; // invalidate any in-flight chunks
       panel?.webview.postMessage({ type: "cancel" });
-      cleanupTemp();
+      resetPlayback();
       setStatus("idle");
     }),
 
     vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
       speak(HELLO_TEXT, "greeting")
-    )
+    ),
+
+    vscode.commands.registerCommand("kokoroSpeak.selectVoice", async () => {
+      const cfg = vscode.workspace.getConfiguration("kokoroSpeak");
+      const current = cfg.get<string>("voice", "af_heart");
+      const pick = await vscode.window.showQuickPick(
+        VOICES.map((v) => ({
+          label: v,
+          description: v === current ? "current" : undefined,
+        })),
+        { placeHolder: "Select a Kokoro voice" }
+      );
+      if (pick) {
+        await cfg.update(
+          "voice",
+          pick.label,
+          vscode.ConfigurationTarget.Global
+        );
+        vscode.window.showInformationMessage(
+          `Kokoro Speak: voice set to ${pick.label}.`
+        );
+      }
+    })
   );
 }
 
+// Kokoro v1.0 voices (a=American, b=British; f=female, m=male).
+const VOICES = [
+  "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
+  "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+  "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
+  "am_onyx", "am_puck", "am_santa",
+  "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+  "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+];
+
 export function deactivate() {
-  player.stop();
-  cleanupTemp();
+  resetPlayback();
   panel?.dispose();
 }
 
@@ -145,8 +196,7 @@ function ensurePanel(context: vscode.ExtensionContext) {
   );
   panel.onDidDispose(() => {
     panel = undefined;
-    player.stop();
-    cleanupTemp();
+    resetPlayback();
     setStatus("idle");
   });
 
@@ -157,7 +207,12 @@ function ensurePanel(context: vscode.ExtensionContext) {
         setStatus(msg.state as Phase, msg.detail);
       }
     } else if (msg?.type === "audio") {
-      playWav(msg.b64 as string);
+      if (msg.reqId !== activeReq) return; // stale chunk from a prior request
+      enqueueWav(msg.b64 as string);
+    } else if (msg?.type === "audioEnd") {
+      if (msg.reqId !== activeReq) return;
+      synthDone = true;
+      if (!playing && queue.length === 0) setStatus("idle");
     } else if (msg?.type === "error") {
       setStatus("error");
       vscode.window.showErrorMessage(`Kokoro Speak: ${msg.text}`);
@@ -174,9 +229,13 @@ function ensurePanel(context: vscode.ExtensionContext) {
   panel.webview.html = getHtml(panel.webview, mainUri, ortBase);
 }
 
-function playWav(b64: string) {
-  cleanupTemp();
-  const file = path.join(os.tmpdir(), `kokoro-speak-${Date.now()}.wav`);
+let tempSeq = 0;
+
+function enqueueWav(b64: string) {
+  const file = path.join(
+    os.tmpdir(),
+    `kokoro-speak-${process.pid}-${tempSeq++}.wav`
+  );
   try {
     fs.writeFileSync(file, Buffer.from(b64, "base64"));
   } catch (err: any) {
@@ -184,22 +243,56 @@ function playWav(b64: string) {
     vscode.window.showErrorMessage(`Kokoro Speak: ${err?.message ?? err}`);
     return;
   }
-  tempFile = file;
-  setStatus("speaking");
-  player.play(file, () => {
-    cleanupTemp();
-    setStatus("idle");
-  });
+  queue.push(file);
+  if (!playing) playNext();
 }
 
-function cleanupTemp() {
-  if (tempFile) {
-    try {
-      fs.rmSync(tempFile, { force: true });
-    } catch {
-      /* ignore */
+function playNext() {
+  const file = queue.shift();
+  if (!file) {
+    playing = false;
+    if (synthDone) setStatus("idle");
+    return;
+  }
+  playing = true;
+  current = file;
+  setStatus("speaking");
+  player.play(
+    file,
+    () => {
+      rmFile(file);
+      if (current === file) current = undefined;
+      playNext();
+    },
+    () => {
+      resetPlayback();
+      setStatus("error");
+      vscode.window.showErrorMessage(
+        "Kokoro Speak: no audio player found. Install one " +
+          "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
+      );
     }
-    tempFile = undefined;
+  );
+}
+
+/** Stop playback, drop the queue, and delete every temp file. */
+function resetPlayback() {
+  player.stop();
+  playing = false;
+  synthDone = false;
+  if (current) {
+    rmFile(current);
+    current = undefined;
+  }
+  for (const f of queue) rmFile(f);
+  queue = [];
+}
+
+function rmFile(file: string) {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    /* ignore */
   }
 }
 

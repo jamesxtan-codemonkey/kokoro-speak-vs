@@ -62,28 +62,32 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-async function synthesize(text: string) {
+async function synthesize(text: string, voice = VOICE, speed = 1, reqId = 0) {
   generation++;
   const myGen = generation;
   try {
     const tts = await loadModel();
     if (myGen !== generation) return;
 
+    // Stream sentence-by-sentence. Kokoro has a ~510-token context limit, so a
+    // single generate() would silently truncate long text; streaming also lets
+    // the host start playing the first sentence while the rest synthesize.
     status("synthesizing", "Synthesizing…");
-    const t0 = performance.now();
-    const audio = await tts.generate(text, { voice: VOICE });
-    if (myGen !== generation) return; // cancelled while synthesizing
-
-    const ms = Math.round(performance.now() - t0);
-    const seconds = audio.audio.length / audio.sampling_rate;
-    log(
-      `synthesized ${seconds.toFixed(2)}s in ${ms}ms ` +
-        `(${(seconds / (ms / 1000)).toFixed(1)}x realtime)`
-    );
-
-    const b64 = bytesToBase64(new Uint8Array(audio.toWav()));
-    status("synthesizing", "Sending to player…");
-    vscode.postMessage({ type: "audio", b64 });
+    let index = 0;
+    for await (const chunk of tts.stream(text, { voice: voice as any, speed })) {
+      if (myGen !== generation) return; // cancelled
+      const b64 = bytesToBase64(new Uint8Array(chunk.audio.toWav()));
+      vscode.postMessage({ type: "audio", b64, index, reqId });
+      log(`chunk ${index}: ${chunk.text.trim().slice(0, 60)}`);
+      index++;
+    }
+    if (myGen !== generation) return;
+    // Local panel text only — do NOT post a status here, it would override the
+    // host's "Speaking" while queued audio is still playing.
+    stateEl.textContent = index
+      ? `Synthesized ${index} chunk(s).`
+      : "Nothing to speak.";
+    vscode.postMessage({ type: "audioEnd", count: index, reqId });
   } catch (err: any) {
     if (myGen !== generation) return;
     const message = err?.message ?? String(err);
@@ -96,7 +100,7 @@ async function synthesize(text: string) {
 window.addEventListener("message", (event) => {
   const msg = event.data;
   if (msg?.type === "synthesize") {
-    synthesize(String(msg.text));
+    synthesize(String(msg.text), msg.voice, msg.speed, msg.reqId);
   } else if (msg?.type === "cancel") {
     generation++; // drop any in-flight synthesis
     status("idle", "Stopped.");
