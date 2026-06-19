@@ -33,6 +33,8 @@ test("deterministic: tilde, ranges, arrows, emoji", () => {
     ["~100 events", "about 100 events"],
     ["A → C", "A to C"],
     ["step 1 -> step 2", "step 1 to step 2"], // space-flanked ASCII arrow
+    ["a -> b -> c", "a to b to c"], // chained arrows
+    ["queue: -> ->", "queue: to to"], // adjacent arrows both convert
     ["x-->0", "x-->0"], // code: not whitespace-flanked → left intact
     ["a->b", "a->b"], // code: member access → left intact
     ["2*3 and a*b", "2*3 and a*b"], // asterisks not stripped (no 2*3→23)

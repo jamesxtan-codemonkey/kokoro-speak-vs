@@ -122,7 +122,8 @@ export function deterministic(text: string): string {
   // Arrows → "to". Unicode arrows in any context; ASCII "->" only when
   // whitespace-flanked, so code like "x-->0" or "a->b" is left intact.
   s = s.replace(/\s*(?:→|⟶|⇒|↦)\s*/g, " to ");
-  s = s.replace(/(^|\s)-+>(\s|$)/g, "$1to$2");
+  // Non-consuming boundaries so adjacent arrows ("-> ->") both convert.
+  s = s.replace(/(?<=^|\s)-+>(?=\s|$)/g, "to");
 
   // Tilde before a number/currency → "about" (~100 → about 100).
   s = s.replace(/~\s?(?=[\d$])/g, "about ");
