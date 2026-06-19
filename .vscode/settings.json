@@ -1,0 +1,5 @@
+{
+  "kokoroSpeak.normalization.mode": "ai",
+  "kokoroSpeak.normalization.backend": "cli",
+  "kokoroSpeak.normalization.command": "claude"
+}
