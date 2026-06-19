@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { getSpeakableText } from "./textprep";
-import { AudioPlayer } from "./player";
+import { StreamPlayer } from "./player";
 import { loadModel, synthesize } from "./synth";
 
 // Synthesis runs in the extension host (onnxruntime-node, ~3x realtime) and audio
@@ -21,14 +21,8 @@ type Phase =
   | "error";
 
 let status: vscode.StatusBarItem;
-const player = new AudioPlayer();
+let player: StreamPlayer | undefined;
 let modelReady = false;
-
-// Streaming playback queue: segments arrive as they synthesize and play in order.
-let queue: string[] = [];
-let current: string | undefined;
-let playing = false;
-let synthDone = false;
 let tempSeq = 0;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
@@ -55,13 +49,14 @@ export function activate(context: vscode.ExtensionContext) {
       speak(getSpeakableText(src.document.languageId, src.text), "document");
     }),
     vscode.commands.registerCommand("kokoroSpeak.pause", () => {
-      if (!player.isActive) return;
+      if (!player?.isActive) return;
       const s = player.togglePause();
       setStatus(s === "paused" ? "paused" : "speaking");
     }),
     vscode.commands.registerCommand("kokoroSpeak.stop", () => {
       activeReq = ++reqSeq; // invalidate in-flight synthesis + segments
-      resetPlayback();
+      player?.stop();
+      player = undefined;
       setStatus("idle");
     }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
@@ -73,7 +68,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   activeReq = ++reqSeq;
-  resetPlayback();
+  player?.stop();
+  player = undefined;
 }
 
 function noSource() {
@@ -93,9 +89,23 @@ function speak(text: string | undefined, what: string) {
   const speed = cfg.get<number>("speed", 1.0);
   const bufferSeconds = cfg.get<number>("bufferSeconds", 0);
 
-  resetPlayback();
+  player?.stop();
   const myReq = (activeReq = ++reqSeq);
   const cancelled = () => myReq !== activeReq;
+
+  const sp = new StreamPlayer({
+    onSpeaking: () => !cancelled() && setStatus("speaking"),
+    onIdle: () => !cancelled() && setStatus("idle"),
+    onUnavailable: () => {
+      if (cancelled()) return;
+      setStatus("error");
+      vscode.window.showErrorMessage(
+        "Kokoro Speak: no audio player found. Install one " +
+          "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
+      );
+    },
+  });
+  player = sp;
 
   void (async () => {
     try {
@@ -108,26 +118,23 @@ function speak(text: string | undefined, what: string) {
         if (cancelled()) return;
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
-      const sentences = await synthesize(
+      await synthesize(
         trimmed,
         { voice, speed, bufferSeconds },
         {
-          onSegment: (wav) => {
+          onSegment: (wav, dur) => {
             if (cancelled()) return;
-            enqueueWav(wav);
+            sp.add(writeTemp(wav), dur);
           },
           onProgress: (n) => {
-            if (!cancelled() && !playing) {
+            if (!cancelled() && !sp.isActive) {
               setStatus("synthesizing", `Synthesizing ${what}… (${n})`);
             }
           },
           shouldCancel: cancelled,
         }
       );
-      if (cancelled()) return;
-      synthDone = true;
-      if (sentences === 0) setStatus("idle");
-      else if (!playing && queue.length === 0) setStatus("idle");
+      if (!cancelled()) sp.end();
     } catch (err: any) {
       if (cancelled()) return;
       setStatus("error");
@@ -190,70 +197,14 @@ function resolveSource(opts?: {
     : undefined;
 }
 
-// --- playback queue ---------------------------------------------------------
-
-function enqueueWav(wav: Buffer) {
+/** Write a WAV segment to a unique temp file and return its path. */
+function writeTemp(wav: Buffer): string {
   const file = path.join(
     os.tmpdir(),
     `kokoro-speak-${process.pid}-${tempSeq++}.wav`
   );
-  try {
-    fs.writeFileSync(file, wav);
-  } catch (err: any) {
-    setStatus("error");
-    vscode.window.showErrorMessage(`Kokoro Speak: ${err?.message ?? err}`);
-    return;
-  }
-  queue.push(file);
-  if (!playing) playNext();
-}
-
-function playNext() {
-  const file = queue.shift();
-  if (!file) {
-    playing = false;
-    if (synthDone) setStatus("idle");
-    return;
-  }
-  playing = true;
-  current = file;
-  setStatus("speaking");
-  player.play(
-    file,
-    () => {
-      rmFile(file);
-      if (current === file) current = undefined;
-      playNext();
-    },
-    () => {
-      resetPlayback();
-      setStatus("error");
-      vscode.window.showErrorMessage(
-        "Kokoro Speak: no audio player found. Install one " +
-          "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
-      );
-    }
-  );
-}
-
-function resetPlayback() {
-  player.stop();
-  playing = false;
-  synthDone = false;
-  if (current) {
-    rmFile(current);
-    current = undefined;
-  }
-  for (const f of queue) rmFile(f);
-  queue = [];
-}
-
-function rmFile(file: string) {
-  try {
-    fs.rmSync(file, { force: true });
-  } catch {
-    /* ignore */
-  }
+  fs.writeFileSync(file, wav);
+  return file;
 }
 
 function setStatus(phase: Phase, detail?: string) {
@@ -268,8 +219,18 @@ function setStatus(phase: Phase, detail?: string) {
   };
   const { icon, label } = map[phase];
   status.text = `$(${icon}) ${detail ?? label}`;
-  status.tooltip =
-    phase === "idle" ? "Kokoro Speak" : "Kokoro Speak — click to stop";
+  // Left click runs the command (Stop). Right-click isn't supported on status
+  // items, so Pause/Resume is offered as a trusted command link in the tooltip.
+  const active = phase === "speaking" || phase === "paused";
+  const tip = new vscode.MarkdownString(undefined, true);
+  tip.isTrusted = true;
+  tip.appendMarkdown("**Kokoro Speak** — left-click to stop\n\n");
+  if (active) {
+    const pl = phase === "paused" ? "$(play) Resume" : "$(debug-pause) Pause";
+    tip.appendMarkdown(`[${pl}](command:kokoroSpeak.pause) · `);
+  }
+  tip.appendMarkdown("[$(debug-stop) Stop](command:kokoroSpeak.stop)");
+  status.tooltip = tip;
   status.show();
 }
 

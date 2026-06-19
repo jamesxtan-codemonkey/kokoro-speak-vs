@@ -11,12 +11,17 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - **Synthesis runs in the extension host** via `onnxruntime-node` (`device: "cpu"`),
   ~3x realtime. No webview, no CSP, no browser autoplay restrictions.
 - Text is split into sentences (`tts.stream()` + an explicit `TextSplitterStream`
-  we `close()`), then the sentences' audio is **concatenated into one gapless WAV**
-  and played through the OS audio player (`src/player.ts`: afplay /
-  paplay·aplay·ffplay / PowerShell).
-- `kokoroSpeak.bufferSeconds` trades smoothness vs. latency: `0` (default) buffers
-  the whole selection (gapless); a positive value starts sooner with a brief gap
-  at each segment boundary.
+  we `close()`). Each sentence is played as soon as it's synthesized — and because
+  host synthesis (~3x) outruns playback, the rest are always ready in time.
+- **Gapless streaming** (`src/player.ts`): file players like `afplay` can't be fed
+  a continuous stream, and each launch has a fixed startup latency (~0.85s) that
+  would otherwise be a gap between sentences. The `StreamPlayer` hides it by
+  spawning segment N+1 exactly `duration(N)` after segment N, so the startup
+  overlaps the previous segment's tail and seams line up. (Verified: three 1.0s
+  segments play in ~3.9s total — one startup, not three.)
+- `kokoroSpeak.bufferSeconds`: `0` (default) streams per sentence for the lowest
+  latency; a larger value groups more audio per segment. Playback is gapless
+  either way.
 
 > kokoro-js is ESM-only and the host bundle is CommonJS, so it's loaded with a
 > real dynamic `import()` (hidden from esbuild) to avoid `ERR_REQUIRE_ESM` on the
@@ -27,8 +32,9 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - **Speak Selection** (`Cmd/Ctrl+Alt+S`; empty selection → whole document),
   **Speak Document**, **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
   (`Cmd/Ctrl+Alt+X`), right-click **Speak Selection**, and a status-bar item that
-  shows state (Loading / Synthesizing selection… / Speaking / Paused) and stops
-  on click.
+  shows state (Loading / Synthesizing selection… / Speaking / Paused). The
+  status item **left-clicks to stop**; its hover tooltip has a **Pause/Resume**
+  command link (VS Code status items don't support a right-click action).
 - Markdown preview is handled: the keybinding works there and the underlying
   document is spoken with Markdown syntax stripped (`src/textprep.ts`).
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),

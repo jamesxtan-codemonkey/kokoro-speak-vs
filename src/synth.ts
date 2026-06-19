@@ -101,7 +101,6 @@ export async function synthesize(
   let bufferedSamples = 0;
   let rate = 24000;
   let sentences = 0;
-  const limitSec = bufferSeconds > 0 ? bufferSeconds : MAX_BUFFER_SEC;
 
   const flush = () => {
     if (!bufferedSamples) return;
@@ -123,7 +122,13 @@ export async function synthesize(
     rate = chunk.audio.sampling_rate;
     sentences++;
     cb.onProgress?.(sentences);
-    if (bufferedSamples / rate >= limitSec) flush();
+    // bufferSeconds <= 0 → emit each sentence immediately (lowest latency;
+    // gapless seams handled by the streaming player). Otherwise group into
+    // ~bufferSeconds segments, capped so a huge doc still bounds memory.
+    const haveSec = bufferedSamples / rate;
+    if (bufferSeconds <= 0 || haveSec >= bufferSeconds || haveSec >= MAX_BUFFER_SEC) {
+      flush();
+    }
   }
   if (cb.shouldCancel()) return sentences;
   flush();

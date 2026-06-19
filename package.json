@@ -77,7 +77,7 @@
           "type": "number",
           "default": 0,
           "minimum": 0,
-          "description": "Audio buffered before playback. 0 = buffer the whole selection and play it as one gapless clip (smoothest, but you wait for synthesis first). A positive value starts playing after that many seconds of audio, at the cost of a brief gap at each segment boundary."
+          "description": "Segment size for streaming playback. 0 = stream per sentence, so audio starts as soon as the first sentence is synthesized (lowest latency). Playback stays gapless either way — segments are scheduled so each player launch's startup is hidden under the previous segment. A larger value groups more audio per segment (fewer, longer segments)."
         }
       }
     },
