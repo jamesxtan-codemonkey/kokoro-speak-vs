@@ -3,6 +3,9 @@
 # are included from node_modules by vsce (NOT excluded here).
 .vscode/**
 src/**
+# The standalone MCP server is not part of the VS Code extension (it's built and
+# run separately — see docs/mcp-voice.md).
+dist/mcp.js
 webview/**
 scripts/**
 test/**

@@ -16,9 +16,6 @@
     "url": "https://github.com/jamesxtan-codemonkey/kokoro-speak-vs.git"
   },
   "main": "./dist/extension.js",
-  "bin": {
-    "kokoro-speak-mcp": "./dist/mcp.js"
-  },
   "activationEvents": [
     "onStartupFinished"
   ],
