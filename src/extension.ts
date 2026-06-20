@@ -583,15 +583,6 @@ function setStatus(phase: Phase, detail?: string) {
   tip.appendMarkdown("\n\n_Click the item for controls._");
   status.tooltip = tip;
   status.show();
-
-  // Auto-open the control toast only when audio actually starts playing — not
-  // during load/synthesis, where a "Pause" button would be misleading and the
-  // toast (which can't be updated) would then be stuck showing the wrong state.
-  // showControls() guards against duplicates, so this is a no-op if one is up.
-  const autoShow = vscode.workspace
-    .getConfiguration("kokoroSpeak")
-    .get<boolean>("showControlsWhilePlaying", true);
-  if (phase === "speaking" && autoShow) void showControls();
 }
 
 /**
@@ -602,44 +593,34 @@ function setStatus(phase: Phase, detail?: string) {
  * item to reopen.
  */
 async function showControls() {
-  if (controlToastOpen) return; // one live toast at a time
+  if (controlToastOpen) return; // don't stack toasts on repeated clicks
   controlToastOpen = true;
   try {
-    for (;;) {
-      // Buttons reflect the real phase at show time. (A toast can't be updated,
-      // so if the phase changes via the keybinding or playback ending, click the
-      // status item to reopen with the correct controls.)
-      const stoppable = currentPhase !== "idle" && currentPhase !== "error";
-      const buttons: string[] = [];
-      if (currentPhase === "speaking") buttons.push("Pause");
-      else if (currentPhase === "paused") buttons.push("Resume");
-      else if (!stoppable) buttons.push("Play"); // idle/error → speak clipboard
-      // loading / synthesizing: nothing is playing yet, so no Play/Pause button.
-      if (stoppable) buttons.push("Stop");
-      buttons.push("Config");
+    // On-demand popup (status-item click). Buttons reflect the phase at click
+    // time; picking one runs it and closes the toast. A notification can't be
+    // updated, so to act again (e.g. Pause then Stop) click the status item
+    // again — the fresh toast shows the correct controls for the new state.
+    const stoppable = currentPhase !== "idle" && currentPhase !== "error";
+    const buttons: string[] = [];
+    if (currentPhase === "speaking") buttons.push("Pause");
+    else if (currentPhase === "paused") buttons.push("Resume");
+    else if (!stoppable) buttons.push("Play"); // idle/error → speak clipboard
+    // loading / synthesizing: nothing is playing yet, so no Play/Pause button.
+    if (stoppable) buttons.push("Stop");
+    buttons.push("Config");
 
-      const pick = await vscode.window.showInformationMessage(
-        "Kokoro TTS",
-        ...buttons
-      );
-      if (pick === "Pause" || pick === "Resume") {
-        await vscode.commands.executeCommand("kokoroSpeak.pause");
-        continue; // re-show with the toggled label
-      }
-      if (pick === "Play") {
-        await vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
-        continue; // keep controls up as playback starts
-      }
-      if (pick === "Stop") {
-        await vscode.commands.executeCommand("kokoroSpeak.stop");
-        break;
-      }
-      if (pick === "Config") {
-        await vscode.commands.executeCommand("kokoroSpeak.configure");
-        break;
-      }
-      break; // dismissed or auto-hidden
-    }
+    const pick = await vscode.window.showInformationMessage(
+      "Kokoro TTS",
+      ...buttons
+    );
+    if (pick === "Pause" || pick === "Resume")
+      await vscode.commands.executeCommand("kokoroSpeak.pause");
+    else if (pick === "Play")
+      await vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
+    else if (pick === "Stop")
+      await vscode.commands.executeCommand("kokoroSpeak.stop");
+    else if (pick === "Config")
+      await vscode.commands.executeCommand("kokoroSpeak.configure");
   } finally {
     controlToastOpen = false;
   }
