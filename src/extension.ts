@@ -581,10 +581,13 @@ function setStatus(phase: Phase, detail?: string) {
     const pl = phase === "paused" ? "$(debug-continue) Resume" : "$(debug-pause) Pause";
     tip.appendMarkdown(` · [${pl}](command:kokoroSpeak.pause)`);
   }
-  tip.appendMarkdown(
-    " · [$(debug-stop) Stop](command:kokoroSpeak.stop)" +
-      " · [$(gear) Config](command:kokoroSpeak.configure)"
-  );
+  // Stop only when there is something to stop (loading/synthesizing/speaking/
+  // paused) — not when idle/stopped.
+  const stoppable = phase !== "idle" && phase !== "error";
+  if (stoppable) {
+    tip.appendMarkdown(" · [$(debug-stop) Stop](command:kokoroSpeak.stop)");
+  }
+  tip.appendMarkdown(" · [$(gear) Config](command:kokoroSpeak.configure)");
   tip.appendMarkdown(
     active
       ? "\n\n_Click to pause/resume._"

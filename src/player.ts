@@ -124,8 +124,8 @@ export class StreamPlayer {
   private next = 0; // index of the next segment to spawn
   private procs = new Set<SegmentHandle>();
   private timer: NodeJS.Timeout | undefined;
-  private timerEndsAt = 0;
-  private pausedRemaining: number | undefined;
+  private playHead = 0; // index of the earliest segment not yet finished playing
+  private pausedAt: number | undefined; // resume-from index while paused
   private started = false;
   private waiting = false;
   private synthDone = false;
@@ -145,7 +145,7 @@ export class StreamPlayer {
       this.started = true;
       this.cb.onSpeaking();
       this.spawn();
-    } else if (this.waiting && this.pausedRemaining === undefined) {
+    } else if (this.waiting && this.pausedAt === undefined) {
       this.waiting = false;
       this.spawn();
     }
@@ -165,11 +165,11 @@ export class StreamPlayer {
       (this.procs.size > 0 ||
         this.waiting ||
         this.timer !== undefined ||
-        this.pausedRemaining !== undefined)
+        this.pausedAt !== undefined)
     );
   }
   get isPaused(): boolean {
-    return this.pausedRemaining !== undefined;
+    return this.pausedAt !== undefined;
   }
 
   togglePause(): "speaking" | "paused" {
@@ -181,29 +181,34 @@ export class StreamPlayer {
     return "paused";
   }
 
+  // Pause by KILLING the current player(s), not SIGSTOP. afplay hands the whole
+  // (short) sentence to coreaudiod's audio queue, so freezing the afplay process
+  // does NOT stop the sound — coreaudiod keeps playing the buffered audio (often
+  // the rest of the sentence), which is why SIGSTOP felt slow. Killing the player
+  // tears its queue down for instant silence. cancel() suppresses the segment's
+  // exit handler, so its WAV is NOT deleted and `playHead` is preserved — the
+  // current sentence can be replayed on resume.
   private pause() {
     if (this.stopped || this.isPaused) return;
-    for (const p of this.procs) p.kill("SIGSTOP");
     if (this.timer) {
       clearTimeout(this.timer);
-      this.pausedRemaining = Math.max(0, this.timerEndsAt - Date.now());
       this.timer = undefined;
-    } else {
-      this.pausedRemaining = 0;
     }
+    for (const p of this.procs) p.cancel();
+    this.procs.clear();
+    this.pausedAt = this.playHead; // resume re-plays from the current segment
   }
 
+  // Resume by re-playing from where we paused. The current sentence restarts from
+  // its beginning (a killed player can't resume mid-buffer), then streaming
+  // continues normally.
   private resume() {
-    if (this.pausedRemaining === undefined) return;
-    for (const p of this.procs) p.kill("SIGCONT");
-    const ms = this.pausedRemaining;
-    this.pausedRemaining = undefined;
+    if (this.pausedAt === undefined) return;
+    this.next = this.pausedAt;
+    this.pausedAt = undefined;
     if (this.next < this.q.length) {
-      // We're about to (re)schedule a spawn, so we're no longer waiting on
-      // synthesis. Leaving `waiting` set lets the next add() spawn a second,
-      // overlapping segment alongside this scheduled one — an audible echo.
-      this.waiting = false;
-      this.scheduleNext(ms);
+      this.waiting = false; // about to spawn; not waiting on synthesis (avoids echo)
+      this.spawn();
     } else if (this.synthDone) this.checkDone();
     else this.waiting = true; // nothing buffered yet; add() will resume
   }
@@ -226,13 +231,18 @@ export class StreamPlayer {
       this.checkDone();
       return;
     }
+    const segIndex = this.next;
     this.next++;
     let handle!: SegmentHandle;
     handle = spawnSegment(
       seg.file,
       this.resolveCandidates,
       () => {
+        // Natural end of this segment's audio: advance the replay point and
+        // delete its file. A pause-kill is cancelled, so this does NOT run then —
+        // the file survives and playHead stays put for replay on resume.
         this.procs.delete(handle);
+        this.playHead = Math.max(this.playHead, segIndex + 1);
         rmFile(seg.file);
         this.checkDone();
       },
@@ -247,7 +257,6 @@ export class StreamPlayer {
   }
 
   private scheduleNext(ms: number) {
-    this.timerEndsAt = Date.now() + ms;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.spawn();
@@ -261,7 +270,7 @@ export class StreamPlayer {
       this.next >= this.q.length &&
       this.procs.size === 0 &&
       this.timer === undefined &&
-      this.pausedRemaining === undefined
+      this.pausedAt === undefined
     ) {
       this.completed = true;
       this.waiting = false;

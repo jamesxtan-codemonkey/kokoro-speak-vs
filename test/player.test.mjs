@@ -178,14 +178,14 @@ test("play: segments spawn once each, in order, gapless (no overlap)", { timeout
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("pause suspends the playing segment — no audio bleeds past pause", { timeout: 3000 }, async (t) => {
-  if (process.platform === "win32") return t.skip("SIGSTOP/SIGCONT not supported on win32");
+test("pause stops the audio immediately (kills the player, no bleed)", { timeout: 3000 }, async () => {
   const dir = tempDir();
   const wav = join(dir, "seg.wav");
   const marker = join(dir, "finished");
   writeFileSync(wav, "fake");
 
-  // Fake player writes a marker when its audio "finishes" (after 250ms).
+  // Fake player writes a marker when its audio "finishes" (after 250ms). Pause
+  // kills it before then, so the marker is never written = audio stopped now.
   const player = new StreamPlayer(
     { onSpeaking() {}, onIdle() {}, onUnavailable() { assert.fail("node player should exist"); } },
     () => [[process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'done'), 250)", marker]]]
@@ -195,18 +195,15 @@ test("pause suspends the playing segment — no audio bleeds past pause", { time
   player.end();
   await delay(80); // mid-playback
   player.togglePause();
-  await delay(500); // well past the 250ms "audio" — if truly suspended it can't finish
+  assert.equal(player.isPaused, true);
+  await delay(400); // past the 250ms "audio" — killed, so it never finishes
 
-  assert.equal(existsSync(marker), false, "paused player kept playing (would echo on resume)");
-
-  player.togglePause(); // resume
-  await delay(400);
-  assert.equal(existsSync(marker), true, "resumed player did not finish");
+  assert.equal(existsSync(marker), false, "audio kept playing after pause");
   player.stop();
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("pause then resume mid-segment does not re-spawn the current segment", { timeout: 2000 }, async () => {
+test("resume replays the current segment from its start", { timeout: 2000 }, async () => {
   const dir = tempDir();
   const wav = join(dir, "seg.wav");
   writeFileSync(wav, "fake");
@@ -221,12 +218,15 @@ test("pause then resume mid-segment does not re-spawn the current segment", { ti
   addSeg(player, durByFile, wav, 300);
   player.end();
   await delay(80);
-  player.togglePause();
+  player.togglePause(); // kills the player (instant silence)
   await delay(120);
-  player.togglePause(); // resume — must SIGCONT the existing process, not relaunch
+  player.togglePause(); // resume → replay the SAME segment from the start
   await delay(400);
 
-  assert.equal(spawns.length, 1, `segment re-spawned ${spawns.length}× on resume (echo)`);
+  // Spawned twice: the initial play and the replay on resume — same file, so no
+  // content is lost when resuming after an instant (kill-based) pause.
+  assert.equal(spawns.length, 2, `expected 2 spawns (play + replay), got ${spawns.length}`);
+  assert.ok(spawns.every((s) => s.file === wav));
   rmSync(dir, { recursive: true, force: true });
 });
 
