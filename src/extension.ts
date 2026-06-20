@@ -197,6 +197,11 @@ function speak(text: string | undefined, what: string) {
   const sp: AudioPlayer = PcmStreamPlayer.tryCreate(cb) ?? new FileAudioPlayer(cb);
   player = sp;
 
+  // Show "we're on it" synchronously, the instant play is pressed — prepareText
+  // (AI normalization) and the first model load can take a moment, and otherwise
+  // the status bar wouldn't change until after them.
+  setStatus("synthesizing", `Preparing ${what}…`);
+
   void (async () => {
     try {
       const speakText = await prepareText(trimmed, what, cancelled);
@@ -485,7 +490,7 @@ async function prepareText(
     const ok = await resolveAiConsent();
     if (cancelled()) return text;
     if (!ok) mode = "deterministic";
-    else setStatus("synthesizing", `Preparing ${what}…`);
+    // status already shows "Preparing …" from speak()
   }
 
   return normalize(text, {
