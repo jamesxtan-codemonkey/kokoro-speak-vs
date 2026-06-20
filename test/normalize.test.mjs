@@ -39,7 +39,7 @@ test("deterministic: tilde, ranges, arrows, emoji", () => {
     ["a->b", "a->b"], // code: member access → left intact
     ["<!-- -->", "<!-- -->"], // double-dash --> left alone (HTML comment)
     ["loop --> exit", "loop --> exit"], // double-dash arrow not matched
-    ["2*3 and a*b", "2*3 and a*b"], // asterisks not stripped (no 2*3→23)
+    ["2*3", "2*3"], // lone multiplication preserved (no 2*3→23)
     ["✅ done", "check done"],
     ["build ✅", "build check"],
     ["ship it 🚀🔥", "ship it rocket fire"], // mapped emoji
@@ -48,6 +48,27 @@ test("deterministic: tilde, ranges, arrows, emoji", () => {
   for (const [input, expected] of cases) {
     assert.equal(N.deterministic(input), expected, `for "${input}"`);
   }
+});
+
+test("emphasis markers are silent (never read 'asterisk'), even off the Markdown path", () => {
+  const cases = [
+    ["**bold** and *italic*", "bold and italic"],
+    ["*(Source: adopting the critique on the merits.)*", "(Source: adopting the critique on the merits.)"],
+    // multi-line Markdown prose spoken from a non-Markdown buffer (no stripMarkdown)
+    [
+      "**Upgrade over ego.** Adopt a critique **iff the argument is strictly stronger** — never for\nego. **Authority, source, and pressure are not evidence.** That last clause.\n*(Source: the merits.)*",
+      "Upgrade over ego. Adopt a critique iff the argument is strictly stronger — never for\nego. Authority, source, and pressure are not evidence. That last clause.\n(Source: the merits.)",
+    ],
+    ["__bold__ and _under_ emphasis", "bold and under emphasis"],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(N.deterministic(input), expected, `for "${input}"`);
+    assert.ok(!/\*/.test(N.deterministic(input)), `no asterisk left: "${input}"`);
+  }
+  // intra-word underscores (identifiers) survive
+  assert.equal(N.deterministic("read file_name and snake_case"), "read file_name and snake_case");
+  // lone / spaced operators are not treated as emphasis
+  assert.equal(N.deterministic("compute a * b carefully"), "compute a * b carefully");
 });
 
 test("spellOut: acronyms read letter-by-letter (whole words only)", () => {

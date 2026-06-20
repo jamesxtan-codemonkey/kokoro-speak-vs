@@ -116,8 +116,25 @@ export function applySpellOut(text: string, list?: string[]): string {
  * is read correctly as-is). Conservative — ambiguous cases are left alone and
  * handled by the `ai` mode instead.
  */
+/**
+ * Silence Markdown emphasis markers so they aren't read as "asterisk". Strips
+ * PAIRED emphasis only — **bold**, *italic*, __x__, _x_ vanish (the word
+ * stays) — while lone operators (2*3, *ptr, **kwargs) and identifiers
+ * (snake_case) survive. Applied in the normalizer (not just the Markdown
+ * stripper) so emphasis in text spoken from a non-Markdown editor, or returned
+ * by the LLM, is still silenced. The inner-no-space guard on `*` keeps spaced
+ * multiplication ("a * b") intact; `_` only at word boundaries (CommonMark).
+ */
+export function stripEmphasis(s: string): string {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(?!\s)([^*]+?)(?<!\s)\*/g, "$1")
+    .replace(/(?<!\w)__(.+?)__(?!\w)/g, "$1")
+    .replace(/(?<!\w)_(.+?)_(?!\w)/g, "$1");
+}
+
 export function deterministic(text: string): string {
-  let s = text;
+  let s = stripEmphasis(text);
 
   // Arrows → "to". Unicode arrows in any context; the ASCII single "->" only
   // when whitespace-flanked, so code like "x->y", "a->b" is left intact. A
@@ -511,7 +528,10 @@ export async function normalize(
     Math.min(8192, pre.length + 256)
   );
 
-  const final = result ?? deterministic(pre); // fall back on any failure
+  // Strip emphasis from the model's output too — a guaranteed floor so markers
+  // are never spoken even if the model echoes them. Fall back to deterministic
+  // on any failure.
+  const final = result ? stripEmphasis(result) : deterministic(pre);
   cacheSet(key, final);
   return final;
 }

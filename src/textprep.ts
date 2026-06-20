@@ -47,7 +47,7 @@ export function stripMarkdown(md: string): string {
   // intra-word "_" as emphasis, so identifiers like snake_case / file_name
   // keep their underscores.
   s = s.replace(/\*\*(.+?)\*\*/g, "$1");
-  s = s.replace(/\*(.+?)\*/g, "$1");
+  s = s.replace(/\*(?!\s)([^*]+?)(?<!\s)\*/g, "$1");
   s = s.replace(/(?<!\w)__(.+?)__(?!\w)/g, "$1");
   s = s.replace(/(?<!\w)_(.+?)_(?!\w)/g, "$1");
   s = s.replace(/~~(.+?)~~/g, "$1");
