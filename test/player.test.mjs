@@ -16,6 +16,42 @@ function tempDir() {
   return mkdtempSync(join(tmpdir(), "kokoro-player-test-"));
 }
 
+// A fake player that records every spawn (file + timestamp) and exits after the
+// segment's duration — so a segment's "audible" interval is [t, t + durMs]. With
+// no startup latency, correctly-scheduled segments are back-to-back (no overlap);
+// an overlap means two players are sounding at once = an echo.
+function recordingResolver(spawns, durByFile) {
+  return (file) => {
+    spawns.push({ file, t: Date.now() });
+    const durMs = durByFile.get(file) ?? 100;
+    return [[process.execPath, ["-e", `setTimeout(() => {}, ${durMs})`]]];
+  };
+}
+
+function addSeg(player, durByFile, file, durMs) {
+  durByFile.set(file, durMs);
+  player.add(file, durMs / 1000);
+}
+
+// Each file must be spawned exactly once (no double-play), and consecutive
+// segments must not overlap (next starts >= the previous one's duration later,
+// minus scheduling jitter). A shorter gap means overlapping audio = echo.
+function assertNoEcho(spawns, durMs, tol = 30) {
+  const counts = {};
+  for (const s of spawns) counts[s.file] = (counts[s.file] ?? 0) + 1;
+  for (const [file, n] of Object.entries(counts)) {
+    assert.equal(n, 1, `segment "${file}" was spawned ${n} times (echo)`);
+  }
+  const sorted = [...spawns].sort((a, b) => a.t - b.t);
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = sorted[i].t - sorted[i - 1].t;
+    assert.ok(
+      gap >= durMs - tol,
+      `segments overlap by ${durMs - gap}ms (echo): "${sorted[i - 1].file}" → "${sorted[i].file}" only ${gap}ms apart`
+    );
+  }
+}
+
 test("stream player becomes inactive after the final segment drains", { timeout: 1000 }, async () => {
   const dir = tempDir();
   const wav = join(dir, "segment.wav");
@@ -115,5 +151,115 @@ test("immediate stop prevents a missing candidate from spawning its fallback", {
 
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(wav), false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("play: segments spawn once each, in order, gapless (no overlap)", { timeout: 2000 }, async () => {
+  const dir = tempDir();
+  const files = ["a", "b", "c"].map((n) => join(dir, `${n}.wav`));
+  for (const f of files) writeFileSync(f, "fake");
+
+  const spawns = [];
+  const durByFile = new Map();
+  let idle;
+  const player = new StreamPlayer(
+    { onSpeaking() {}, onIdle() { idle?.(); }, onUnavailable() { assert.fail("node player should exist"); } },
+    recordingResolver(spawns, durByFile)
+  );
+  const idlePromise = new Promise((r) => (idle = r));
+
+  for (const f of files) addSeg(player, durByFile, f, 100);
+  player.end();
+  await idlePromise;
+
+  assert.equal(player.isActive, false);
+  assert.deepEqual(spawns.map((s) => s.file), files); // spawned in order, once each
+  assertNoEcho(spawns, 100);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("pause suspends the playing segment — no audio bleeds past pause", { timeout: 3000 }, async (t) => {
+  if (process.platform === "win32") return t.skip("SIGSTOP/SIGCONT not supported on win32");
+  const dir = tempDir();
+  const wav = join(dir, "seg.wav");
+  const marker = join(dir, "finished");
+  writeFileSync(wav, "fake");
+
+  // Fake player writes a marker when its audio "finishes" (after 250ms).
+  const player = new StreamPlayer(
+    { onSpeaking() {}, onIdle() {}, onUnavailable() { assert.fail("node player should exist"); } },
+    () => [[process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'done'), 250)", marker]]]
+  );
+
+  player.add(wav, 0.25);
+  player.end();
+  await delay(80); // mid-playback
+  player.togglePause();
+  await delay(500); // well past the 250ms "audio" — if truly suspended it can't finish
+
+  assert.equal(existsSync(marker), false, "paused player kept playing (would echo on resume)");
+
+  player.togglePause(); // resume
+  await delay(400);
+  assert.equal(existsSync(marker), true, "resumed player did not finish");
+  player.stop();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("pause then resume mid-segment does not re-spawn the current segment", { timeout: 2000 }, async () => {
+  const dir = tempDir();
+  const wav = join(dir, "seg.wav");
+  writeFileSync(wav, "fake");
+
+  const spawns = [];
+  const durByFile = new Map();
+  const player = new StreamPlayer(
+    { onSpeaking() {}, onIdle() {}, onUnavailable() { assert.fail("node player should exist"); } },
+    recordingResolver(spawns, durByFile)
+  );
+
+  addSeg(player, durByFile, wav, 300);
+  player.end();
+  await delay(80);
+  player.togglePause();
+  await delay(120);
+  player.togglePause(); // resume — must SIGCONT the existing process, not relaunch
+  await delay(400);
+
+  assert.equal(spawns.length, 1, `segment re-spawned ${spawns.length}× on resume (echo)`);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("pause during a buffer underrun, then resume, does not double-spawn (echo regression)", { timeout: 3000 }, async () => {
+  const dir = tempDir();
+  const files = ["a", "b", "c"].map((n) => join(dir, `${n}.wav`));
+  for (const f of files) writeFileSync(f, "fake");
+
+  const spawns = [];
+  const durByFile = new Map();
+  const player = new StreamPlayer(
+    { onSpeaking() {}, onIdle() {}, onUnavailable() { assert.fail("node player should exist"); } },
+    recordingResolver(spawns, durByFile)
+  );
+
+  // 1) Play "a" and let playback drain past it → the player is now waiting on
+  //    synthesis (buffer underrun): nothing playing, no segment queued.
+  addSeg(player, durByFile, files[0], 100);
+  await delay(220);
+  // 2) Pause in that gap.
+  player.togglePause();
+  // 3) Synthesis catches up while paused.
+  addSeg(player, durByFile, files[1], 100);
+  await delay(30);
+  // 4) Resume → schedules "b". (Bug: left `waiting` set.)
+  player.togglePause();
+  await delay(20);
+  // 5) Next segment arrives. With the bug, `waiting` is still set, so this
+  //    spawns "c" immediately — overlapping "b" → echo.
+  addSeg(player, durByFile, files[2], 100);
+  player.end();
+  await delay(500);
+
+  assertNoEcho(spawns, 100); // each once, and "b"/"c" not overlapping
   rmSync(dir, { recursive: true, force: true });
 });

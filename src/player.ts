@@ -194,8 +194,13 @@ export class StreamPlayer {
     for (const p of this.procs) p.kill("SIGCONT");
     const ms = this.pausedRemaining;
     this.pausedRemaining = undefined;
-    if (this.next < this.q.length) this.scheduleNext(ms);
-    else if (this.synthDone) this.checkDone();
+    if (this.next < this.q.length) {
+      // We're about to (re)schedule a spawn, so we're no longer waiting on
+      // synthesis. Leaving `waiting` set lets the next add() spawn a second,
+      // overlapping segment alongside this scheduled one — an audible echo.
+      this.waiting = false;
+      this.scheduleNext(ms);
+    } else if (this.synthDone) this.checkDone();
     else this.waiting = true; // nothing buffered yet; add() will resume
   }
 
