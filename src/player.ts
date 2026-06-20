@@ -8,7 +8,14 @@ import * as fs from "fs";
 // N+1's audio begins right as segment N's ends. Because host synthesis (~3x
 // realtime) outruns playback, the next segment's file is always ready in time.
 
-function candidates(file: string): Array<[string, string[]]> {
+type PlayerCandidate = [string, string[]];
+type CandidateResolver = (file: string) => PlayerCandidate[];
+
+function psSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+function candidates(file: string): PlayerCandidate[] {
   switch (process.platform) {
     case "darwin":
       return [["afplay", [file]]];
@@ -19,7 +26,7 @@ function candidates(file: string): Array<[string, string[]]> {
           [
             "-NoProfile",
             "-Command",
-            `(New-Object System.Media.SoundPlayer '${file}').PlaySync()`,
+            `(New-Object System.Media.SoundPlayer ${psSingleQuote(file)}).PlaySync()`,
           ],
         ],
       ];
@@ -32,27 +39,74 @@ function candidates(file: string): Array<[string, string[]]> {
   }
 }
 
+class SegmentHandle {
+  private current: ChildProcess | undefined;
+  private cancelled = false;
+
+  set(proc: ChildProcess) {
+    this.current = proc;
+  }
+
+  get isCancelled(): boolean {
+    return this.cancelled;
+  }
+
+  kill(sig?: NodeJS.Signals) {
+    if (this.cancelled) return;
+    safeKill(this.current, sig);
+  }
+
+  cancel() {
+    this.cancelled = true;
+    safeKill(this.current, "SIGCONT");
+    safeKill(this.current);
+  }
+}
+
 /** Spawn a player for one file, with fallback across candidates on ENOENT. */
 function spawnSegment(
   file: string,
+  resolveCandidates: CandidateResolver,
   onExit: () => void,
   onUnavailable: () => void
-): ChildProcess {
-  const chain = candidates(file);
-  // A holder so the returned reference stays valid across ENOENT fallbacks.
-  let proc!: ChildProcess;
+): SegmentHandle {
+  const chain = resolveCandidates(file);
+  const handle = new SegmentHandle();
+  let finished = false;
+
+  const finish = (fn: () => void) => {
+    if (finished) return;
+    finished = true;
+    fn();
+  };
+
   const tryAt = (i: number) => {
+    if (handle.isCancelled) return;
+    if (i >= chain.length) {
+      finish(onUnavailable);
+      return;
+    }
     const [cmd, args] = chain[i];
-    proc = spawn(cmd, args, { stdio: "ignore" });
+    let retired = false;
+    const proc = spawn(cmd, args, { stdio: "ignore" });
+    handle.set(proc);
     proc.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT" && i + 1 < chain.length) tryAt(i + 1);
-      else if (err.code === "ENOENT") onUnavailable();
-      else onExit();
+      if (finished || retired || handle.isCancelled) return;
+      if (err.code === "ENOENT" && i + 1 < chain.length) {
+        retired = true;
+        tryAt(i + 1);
+      } else if (err.code === "ENOENT") {
+        finish(onUnavailable);
+      } else {
+        finish(onExit);
+      }
     });
-    proc.on("exit", onExit);
+    proc.on("exit", () => {
+      if (!retired && !handle.isCancelled) finish(onExit);
+    });
   };
   tryAt(0);
-  return proc;
+  return handle;
 }
 
 export interface StreamCallbacks {
@@ -64,7 +118,7 @@ export interface StreamCallbacks {
 export class StreamPlayer {
   private q: Array<{ file: string; dur: number }> = [];
   private next = 0; // index of the next segment to spawn
-  private procs = new Set<ChildProcess>();
+  private procs = new Set<SegmentHandle>();
   private timer: NodeJS.Timeout | undefined;
   private timerEndsAt = 0;
   private pausedRemaining: number | undefined;
@@ -72,12 +126,16 @@ export class StreamPlayer {
   private waiting = false;
   private synthDone = false;
   private stopped = false;
+  private completed = false;
 
-  constructor(private cb: StreamCallbacks) {}
+  constructor(
+    private cb: StreamCallbacks,
+    private resolveCandidates: CandidateResolver = candidates
+  ) {}
 
   /** Add a ready segment (its WAV file + audio duration in seconds). */
   add(file: string, dur: number) {
-    if (this.stopped) return;
+    if (this.stopped || this.completed) return;
     this.q.push({ file, dur });
     if (!this.started) {
       this.started = true;
@@ -99,6 +157,7 @@ export class StreamPlayer {
     return (
       this.started &&
       !this.stopped &&
+      !this.completed &&
       (this.procs.size > 0 ||
         this.waiting ||
         this.timer !== undefined ||
@@ -120,7 +179,7 @@ export class StreamPlayer {
 
   private pause() {
     if (this.stopped || this.isPaused) return;
-    for (const p of this.procs) safeKill(p, "SIGSTOP");
+    for (const p of this.procs) p.kill("SIGSTOP");
     if (this.timer) {
       clearTimeout(this.timer);
       this.pausedRemaining = Math.max(0, this.timerEndsAt - Date.now());
@@ -132,10 +191,11 @@ export class StreamPlayer {
 
   private resume() {
     if (this.pausedRemaining === undefined) return;
-    for (const p of this.procs) safeKill(p, "SIGCONT");
+    for (const p of this.procs) p.kill("SIGCONT");
     const ms = this.pausedRemaining;
     this.pausedRemaining = undefined;
     if (this.next < this.q.length) this.scheduleNext(ms);
+    else if (this.synthDone) this.checkDone();
     else this.waiting = true; // nothing buffered yet; add() will resume
   }
 
@@ -143,28 +203,27 @@ export class StreamPlayer {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    for (const p of this.procs) {
-      safeKill(p, "SIGCONT");
-      safeKill(p);
-    }
+    for (const p of this.procs) p.cancel();
     this.procs.clear();
     for (const s of this.q) rmFile(s.file);
     this.q = [];
   }
 
   private spawn() {
-    if (this.stopped) return;
+    if (this.stopped || this.completed) return;
     const seg = this.q[this.next];
     if (!seg) {
-      this.waiting = true; // synthesis hasn't produced the next segment yet
+      this.waiting = !this.synthDone; // synthesis may not have produced it yet
       this.checkDone();
       return;
     }
     this.next++;
-    const proc = spawnSegment(
+    let handle!: SegmentHandle;
+    handle = spawnSegment(
       seg.file,
+      this.resolveCandidates,
       () => {
-        this.procs.delete(proc);
+        this.procs.delete(handle);
         rmFile(seg.file);
         this.checkDone();
       },
@@ -173,7 +232,7 @@ export class StreamPlayer {
         this.stop();
       }
     );
-    this.procs.add(proc);
+    this.procs.add(handle);
     // Schedule the next segment to start when this one's audio ends.
     this.scheduleNext(seg.dur * 1000);
   }
@@ -195,12 +254,15 @@ export class StreamPlayer {
       this.timer === undefined &&
       this.pausedRemaining === undefined
     ) {
+      this.completed = true;
+      this.waiting = false;
       this.cb.onIdle();
     }
   }
 }
 
-function safeKill(p: ChildProcess, sig?: NodeJS.Signals) {
+function safeKill(p: ChildProcess | undefined, sig?: NodeJS.Signals) {
+  if (!p?.pid) return;
   try {
     p.kill(sig);
   } catch {

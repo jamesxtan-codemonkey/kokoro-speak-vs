@@ -202,7 +202,7 @@
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --minify --outfile=dist/extension.js",
     "package": "vsce package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
@@ -212,11 +212,16 @@
     "@huggingface/transformers": "3.8.1",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
-    "esbuild": "^0.23.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "typescript": "^5.5.0"
   },
   "allowScripts": {
     "onnxruntime-node@1.21.0": true,
-    "esbuild@0.23.1": true
+    "esbuild@0.28.1": true,
+    "@vscode/vsce-sign": false,
+    "keytar": false,
+    "protobufjs": false,
+    "sharp": false
   }
 }

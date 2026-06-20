@@ -13,9 +13,26 @@ out.log
 .vscodeignore
 tsconfig.json
 REQUIREMENTS.md
+playertest.cjs
+pt.mjs
 **/*.map
 **/.DS_Store
 **/.gstack/**
+node_modules/**/.cache/**
+node_modules/**/*.d.ts
+node_modules/**/types/**
+node_modules/@types/**
+node_modules/@huggingface/transformers/src/**
+node_modules/@huggingface/jinja/src/**
+node_modules/onnxruntime-web/**
+node_modules/@protobufjs/**
+node_modules/flatbuffers/**
+node_modules/guid-typescript/**
+node_modules/long/**
+node_modules/platform/**
+node_modules/protobufjs/**
+node_modules/onnxruntime-node/script/**
+node_modules/tar/**
 
 # Trim native binaries for other platforms — this VSIX targets the local one.
 # (For multi-platform publishing, build per-target VSIXs instead.)

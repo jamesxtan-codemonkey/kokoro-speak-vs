@@ -7,6 +7,7 @@ test/browsertest.js
 test/main-stub.js
 test/.normalize.cjs
 test/.textprep.cjs
+test/.player.cjs
 out/
 out.log
 *.vsix
