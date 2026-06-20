@@ -67,8 +67,11 @@ Customize per user (User settings) or per repo (`.vscode/settings.json`):
 ### AI-driven config
 
 The status-bar tooltip has a **⚙ Config** link (also `Kokoro Speak: Configure
-Normalization (AI)`). It reads [skills/normalization-config.md](skills/normalization-config.md)
-— an editable instruction file — and runs the same LLM backend.
+(AI)`). It reads [skills/normalization-config.md](skills/normalization-config.md)
+— an editable instruction file — and runs the same LLM backend. It configures the
+**voice** and **speed** as well as normalization, so plain-language requests like
+*"use a British male voice"* or *"talk a bit slower"* set `kokoroSpeak.voice` /
+`kokoroSpeak.speed` for you (the model is given the catalog of valid voice ids).
 
 The **AI chooses the UI on the fly**: each turn it returns a control to render,
 and the extension shows it natively — a quick-pick (choose one), a multi-select

@@ -309,6 +309,15 @@ async function configure() {
   for (const key of NORM_KEYS) {
     current[key] = n.get(key.replace("kokoroSpeak.normalization.", ""));
   }
+  const top = vscode.workspace.getConfiguration("kokoroSpeak");
+  current["kokoroSpeak.voice"] = top.get("voice");
+  current["kokoroSpeak.speed"] = top.get("speed");
+
+  // Give the AI the voice catalog so it can map "British male" → a real id.
+  const voicesHint =
+    "Available kokoroSpeak.voice values (a=American, b=British; f=female, " +
+    "m=male):\n" +
+    VOICES.join(", ");
 
   // The AI drives the UI: each turn it returns a control to render (pick / multi
   // / input) or the final settings. Start with a kickoff so the first screen is
@@ -320,7 +329,7 @@ async function configure() {
       () =>
         callBackend(
           skill,
-          `Current settings:\n${JSON.stringify(current, null, 2)}\n\nConversation so far:\n${convo}`,
+          `${voicesHint}\n\nCurrent settings:\n${JSON.stringify(current, null, 2)}\n\nConversation so far:\n${convo}`,
           opts,
           2048
         )
@@ -391,8 +400,11 @@ async function renderAsk(ask: Ask): Promise<string | undefined> {
 }
 
 // Validators per setting — the LLM's proposed values are untrusted; a wrong type
-// would corrupt later normalization, so only well-typed values are persisted.
+// or out-of-range value would corrupt playback/normalization, so only well-typed
+// values are persisted (voice must be a real id; speed within range).
 const NORM_VALID: Record<string, (v: unknown) => boolean> = {
+  "kokoroSpeak.voice": (v) => typeof v === "string" && VOICES.includes(v),
+  "kokoroSpeak.speed": (v) => typeof v === "number" && v >= 0.5 && v <= 2.0,
   "kokoroSpeak.normalization.mode": (v) =>
     v === "off" || v === "deterministic" || v === "ai",
   "kokoroSpeak.normalization.rules": (v) => typeof v === "string",
@@ -415,7 +427,10 @@ async function applySettings(settings: Record<string, unknown>, summary: string)
     return;
   }
   const list = entries
-    .map(([k, v]) => `• ${k.replace("kokoroSpeak.normalization.", "")} = ${preview(v)}`)
+    .map(
+      ([k, v]) =>
+        `• ${k.replace("kokoroSpeak.normalization.", "").replace("kokoroSpeak.", "")} = ${preview(v)}`
+    )
     .join("\n");
   const ok = await vscode.window.showInformationMessage(
     `Kokoro Speak${summary ? " — " + summary : ""}\n\nApply these changes?\n${list}`,
