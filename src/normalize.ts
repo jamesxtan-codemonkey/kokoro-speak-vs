@@ -147,6 +147,13 @@ export function deterministic(text: string): string {
   // Tilde before a number/currency → "about" (~100 → about 100).
   s = s.replace(/~\s?(?=[\d$])/g, "about ");
 
+  // Numeric dates (ISO YYYY-MM-DD) → read each group separately, NOT as a range.
+  // We can't reliably tell the month from the day across locale formats, so we
+  // don't interpret — just swap the hyphens for pauses so "2026-06-16" is spoken
+  // as "2026, 06, 16" rather than the wrong "2026 to 06 to 16". Runs before the
+  // range rules so a 4-2-2 date is never mistaken for a numeric range.
+  s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$1, $2, $3");
+
   // Ranges (en/em dash between number-ish tokens) → " to ".
   s = s.replace(
     /(\d[\d,]*(?:\.\d+)?\s?[kKmMbBtT]?)\s?[–—]\s?(?=\d)/g,
@@ -539,6 +546,7 @@ export async function normalize(
 export const SEED_RULES = `- Currency: "$10B" → "10 billion dollars"; "$3.5M" → "3.5 million dollars".
 - Tilde before a number means about: "~100 events" → "about 100 events"; "~5-20%" → "about 5 to 20 percent".
 - Ranges: "5-20%" → "5 to 20 percent"; "2010-2020" → "2010 to 2020".
+- Dates: read a numeric date like "2026-06-16" as separate groups with pauses ("2026, 06, 16") — never as a range, never say "to". Don't guess which field is the month versus the day.
 - Percentages: "50%" → "50 percent".
 - Arrows mean "to": "A → C" → "A to C"; "step 1 -> step 2" → "step 1 to step 2".
 - Versions: "v1.2.3" → "version 1 point 2 point 3".

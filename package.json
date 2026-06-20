@@ -99,7 +99,7 @@
         "kokoroSpeak.showControlsWhilePlaying": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the status-bar control popup (Play/Pause · Stop · Config) while audio is playing, so the controls are visible without hovering. The popup hides when you click back into the editor; click the status-bar item to reopen it. Set false to only open it on click."
+          "description": "Automatically pop up the bottom-right control toast (Play/Pause · Stop · Config) when playback begins, so the controls are visible without hovering. The toast auto-hides after a few seconds (a VS Code notification can't be pinned); click the status-bar item to reopen it. Set false to only open it on click."
         },
         "kokoroSpeak.normalization.mode": {
           "type": "string",
@@ -206,6 +206,8 @@
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --minify --outfile=dist/extension.js",
     "package": "vsce package",
+    "clean": "rm -rf dist *.vsix",
+    "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
     "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""

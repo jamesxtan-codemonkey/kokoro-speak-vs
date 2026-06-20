@@ -18,6 +18,9 @@ test("deterministic: currency, percent, version, quarter, abbreviations", () => 
     ["v1.2.3", "version 1 point 2 point 3"],
     ["Q4 2025", "fourth quarter 2025"],
     ["345k–400k", "345 thousand to 400 thousand"], // en dash
+    ["2026-06-16", "2026, 06, 16"], // ISO date: separate groups, never "to"
+    ["due 2026-06-16 sharp", "due 2026, 06, 16 sharp"],
+    ["2010-2020", "2010-2020"], // 4-4 year range left for ai mode, not a date
     ["R&D", "R and D"],
   ];
   for (const [input, expected] of cases) {
