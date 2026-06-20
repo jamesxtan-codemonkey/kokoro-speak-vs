@@ -13,12 +13,20 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - Text is split into sentences (`tts.stream()` + an explicit `TextSplitterStream`
   we `close()`). Each sentence is played as soon as it's synthesized — and because
   host synthesis (~3x) outruns playback, the rest are always ready in time.
-- **Gapless streaming** (`src/player.ts`): file players like `afplay` can't be fed
-  a continuous stream, and each launch has a fixed startup latency (~0.85s) that
-  would otherwise be a gap between sentences. The `StreamPlayer` hides it by
-  spawning segment N+1 exactly `duration(N)` after segment N, so the startup
-  overlaps the previous segment's tail and seams line up. (Verified: three 1.0s
-  segments play in ~3.9s total — one startup, not three.)
+- **Playback — native PCM streaming** (`src/pcmplayer.ts`): on a host where the
+  native `audify` addon loads (N-API → RtAudio → CoreAudio), audio is streamed as
+  16-bit PCM into one persistent output stream (Kokoro's 24 kHz resampled to the
+  device rate). This is natively gapless and gives **exact, instant pause/resume**
+  (`rt.stop()`/`start()` at the precise sample) and **instant stop** — no temp
+  files. This is the macOS path.
+- **Fallback — file players** (`src/player.ts`): if `audify` can't load (or on a
+  platform without it), each sentence is written to a temp WAV and played with the
+  OS CLI player (`afplay`/`paplay`/`aplay`/`ffplay`). Those can't be fed a stream
+  and have a fixed ~0.85 s startup, so the `StreamPlayer` hides it by spawning
+  segment N+1 exactly `duration(N)` after segment N — the startup overlaps the
+  previous tail and seams line up. (Verified: three 1.0 s segments play in ~3.9 s,
+  one startup not three.) Here pause kills the player (instant) and resume replays
+  the current sentence.
 - `kokoroSpeak.bufferSeconds`: `0` (default) streams per sentence for the lowest
   latency; a larger value groups more audio per segment. Playback is gapless
   either way.

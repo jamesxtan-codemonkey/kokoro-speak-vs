@@ -4,6 +4,11 @@ import * as os from "os";
 import * as path from "path";
 import { getSpeakableText } from "./textprep";
 import { StreamPlayer } from "./player";
+import {
+  AudioPlayer,
+  AudioCallbacks,
+  PcmStreamPlayer,
+} from "./pcmplayer";
 import { loadModel, synthesize } from "./synth";
 import {
   normalize,
@@ -42,7 +47,7 @@ type Phase =
   | "error";
 
 let status: vscode.StatusBarItem;
-let player: StreamPlayer | undefined;
+let player: AudioPlayer | undefined;
 let currentPhase: Phase = "idle";
 let modelReady = false;
 let extContext: vscode.ExtensionContext;
@@ -174,7 +179,7 @@ function speak(text: string | undefined, what: string) {
   const myReq = (activeReq = ++reqSeq);
   const cancelled = () => myReq !== activeReq;
 
-  const sp = new StreamPlayer({
+  const cb: AudioCallbacks = {
     onSpeaking: () => !cancelled() && setStatus("speaking"),
     onIdle: () => !cancelled() && setStatus("idle"),
     onUnavailable: () => {
@@ -185,7 +190,11 @@ function speak(text: string | undefined, what: string) {
           "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
       );
     },
-  });
+  };
+  // Prefer native PCM streaming (audify → CoreAudio): exact pause/resume, instant
+  // stop, gapless, no temp files. Fall back to the file-based player if audify
+  // can't load or there's no output device.
+  const sp: AudioPlayer = PcmStreamPlayer.tryCreate(cb) ?? new FileAudioPlayer(cb);
   player = sp;
 
   void (async () => {
@@ -211,7 +220,7 @@ function speak(text: string | undefined, what: string) {
         {
           onSegment: (wav, dur) => {
             if (cancelled()) return;
-            sp.add(writeTemp(wav), dur);
+            sp.push(wav, dur);
           },
           onProgress: (n) => {
             if (!cancelled() && !sp.isActive) {
@@ -552,6 +561,34 @@ function writeTemp(wav: Buffer): string {
   );
   fs.writeFileSync(file, wav);
   return file;
+}
+
+/** Fallback player: writes each WAV segment to a temp file and plays it with the
+ *  OS CLI player (afplay/paplay/…). Used when native PCM streaming is
+ *  unavailable. Adapts the file-based StreamPlayer to the AudioPlayer surface. */
+class FileAudioPlayer implements AudioPlayer {
+  private sp: StreamPlayer;
+  constructor(cb: AudioCallbacks) {
+    this.sp = new StreamPlayer(cb);
+  }
+  push(wav: Buffer, dur: number) {
+    this.sp.add(writeTemp(wav), dur);
+  }
+  end() {
+    this.sp.end();
+  }
+  togglePause() {
+    return this.sp.togglePause();
+  }
+  stop() {
+    this.sp.stop();
+  }
+  get isActive() {
+    return this.sp.isActive;
+  }
+  get isPaused() {
+    return this.sp.isPaused;
+  }
 }
 
 function setStatus(phase: Phase, detail?: string) {

@@ -197,17 +197,18 @@
   },
   "scripts": {
     "spike": "node scripts/spike.mjs",
-    "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --outfile=dist/extension.js",
+    "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --outfile=dist/extension.js",
     "typecheck": "tsc --noEmit",
-    "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --format=cjs --minify --outfile=dist/extension.js",
+    "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js",
     "package": "vsce package",
     "clean": "rm -rf dist *.vsix",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
+    "audify": "^1.10.1",
     "kokoro-js": "^1.2.0"
   },
   "devDependencies": {
@@ -220,6 +221,7 @@
   },
   "allowScripts": {
     "onnxruntime-node@1.21.0": true,
+    "audify@1.10.1": true,
     "esbuild@0.28.1": true,
     "@vscode/vsce-sign": false,
     "keytar": false,

@@ -49,3 +49,10 @@ node_modules/**/example/**
 node_modules/**/examples/**
 node_modules/**/docs/**
 node_modules/.bin/**
+
+# audify build/install-time tooling — not needed at runtime (it loads the
+# prebuilt build/Release/audify.node via `bindings`).
+node_modules/cmake-js/**
+node_modules/prebuild-install/**
+node_modules/audify/node_modules/node-abi/**
+node_modules/audify/node_modules/node-addon-api/**
