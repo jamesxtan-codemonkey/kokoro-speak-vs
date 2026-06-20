@@ -43,6 +43,11 @@ type Phase =
 
 let status: vscode.StatusBarItem;
 let player: StreamPlayer | undefined;
+let currentPhase: Phase = "idle";
+type ControlItem = vscode.QuickPickItem & {
+  action: "playpause" | "stop" | "config" | "clipboard";
+};
+let controls: vscode.QuickPick<ControlItem> | undefined;
 let modelReady = false;
 let extContext: vscode.ExtensionContext;
 let tempSeq = 0;
@@ -56,7 +61,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.StatusBarAlignment.Right,
     100
   );
-  status.command = "kokoroSpeak.stop";
+  status.command = "kokoroSpeak.showControls";
   setStatus("idle");
   context.subscriptions.push(status);
 
@@ -93,6 +98,7 @@ export function activate(context: vscode.ExtensionContext) {
       player = undefined;
       setStatus("idle");
     }),
+    vscode.commands.registerCommand("kokoroSpeak.showControls", showControlPanel),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
     vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
     vscode.commands.registerCommand("kokoroSpeak.configure", configure),
@@ -549,6 +555,7 @@ function writeTemp(wav: Buffer): string {
 
 function setStatus(phase: Phase, detail?: string) {
   if (!status) return;
+  currentPhase = phase;
   const map: Record<Phase, { icon: string; label: string }> = {
     idle: { icon: "unmute", label: "Kokoro TTS" },
     loading: { icon: "loading~spin", label: "Loading model" },
@@ -576,9 +583,100 @@ function setStatus(phase: Phase, detail?: string) {
     " · [$(debug-stop) Stop](command:kokoroSpeak.stop)" +
       " · [$(gear) Config](command:kokoroSpeak.configure)"
   );
-  tip.appendMarkdown("\n\n_Left-click the item to stop._");
+  tip.appendMarkdown("\n\n_Click the item for controls._");
   status.tooltip = tip;
   status.show();
+
+  // Keep the click-to-open control popup in sync with playback, and pop it up
+  // automatically while playing so the controls are visible without hovering.
+  syncControls();
+}
+
+/** Items for the control popup, in order: play/pause, stop, config. */
+function controlItems(): ControlItem[] {
+  const first: ControlItem =
+    currentPhase === "speaking"
+      ? { label: "$(debug-pause) Pause", action: "playpause" }
+      : currentPhase === "paused"
+        ? { label: "$(debug-continue) Resume", action: "playpause" }
+        : { label: "$(play) Play (speak clipboard)", action: "clipboard" };
+  return [
+    first,
+    { label: "$(debug-stop) Stop", action: "stop" },
+    { label: "$(gear) Config", action: "config" },
+  ];
+}
+
+function controlPlaceholder(): string {
+  const m: Record<Phase, string> = {
+    idle: "idle",
+    loading: "loading…",
+    synthesizing: "synthesizing…",
+    speaking: "speaking",
+    paused: "paused",
+    error: "error",
+  };
+  return `Kokoro TTS — ${m[currentPhase]}`;
+}
+
+/** Open the control popup (click action on the status item). */
+function showControlPanel() {
+  if (!controls) {
+    const qp = vscode.window.createQuickPick<ControlItem>();
+    qp.title = "Kokoro TTS";
+    qp.onDidAccept(() => {
+      const item = qp.selectedItems[0];
+      if (item) runControl(item.action);
+    });
+    qp.onDidHide(() => {
+      qp.dispose();
+      if (controls === qp) controls = undefined;
+    });
+    controls = qp;
+  }
+  controls.items = controlItems();
+  controls.placeholder = controlPlaceholder();
+  controls.show();
+}
+
+function runControl(action: ControlItem["action"]) {
+  switch (action) {
+    case "playpause":
+      // Toggles; the resulting setStatus refreshes the open popup (Pause↔Resume).
+      vscode.commands.executeCommand("kokoroSpeak.pause");
+      break;
+    case "stop":
+      // Stop → setStatus("idle") → syncControls() closes the popup.
+      vscode.commands.executeCommand("kokoroSpeak.stop");
+      break;
+    case "config":
+      controls?.hide();
+      vscode.commands.executeCommand("kokoroSpeak.configure");
+      break;
+    case "clipboard":
+      controls?.hide();
+      vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
+      break;
+  }
+}
+
+/** Reflect playback state into the popup: refresh if open, auto-show while
+ *  playing, auto-close when playback ends. */
+function syncControls() {
+  const playing = currentPhase === "speaking" || currentPhase === "paused";
+  if (!controls) {
+    const autoShow = vscode.workspace
+      .getConfiguration("kokoroSpeak")
+      .get<boolean>("showControlsWhilePlaying", true);
+    if (playing && autoShow) showControlPanel();
+    return;
+  }
+  if (currentPhase === "idle" || currentPhase === "error") {
+    controls.hide();
+    return;
+  }
+  controls.items = controlItems();
+  controls.placeholder = controlPlaceholder();
 }
 
 // Kokoro v1.0 voices (a=American, b=British; f=female, m=male).

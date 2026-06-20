@@ -96,6 +96,11 @@
           "minimum": 0,
           "description": "Segment size for streaming playback. 0 = stream per sentence, so audio starts as soon as the first sentence is synthesized (lowest latency). Playback stays gapless either way — segments are scheduled so each player launch's startup is hidden under the previous segment. A larger value groups more audio per segment (fewer, longer segments)."
         },
+        "kokoroSpeak.showControlsWhilePlaying": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the status-bar control popup (Play/Pause · Stop · Config) while audio is playing, so the controls are visible without hovering. The popup hides when you click back into the editor; click the status-bar item to reopen it. Set false to only open it on click."
+        },
         "kokoroSpeak.normalization.mode": {
           "type": "string",
           "default": "deterministic",

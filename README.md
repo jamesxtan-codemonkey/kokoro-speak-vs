@@ -34,9 +34,13 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
   webview panel such as the Claude Code panel or Markdown preview: copy, then
   press it), **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
   (`Cmd/Ctrl+Alt+X`), right-click **Speak Selection**, and a status-bar item that
-  shows state (Loading / Synthesizing selection… / Speaking / Paused). The
-  status item **left-clicks to stop**; its hover tooltip has a **Pause/Resume**
-  command link (VS Code status items don't support a right-click action).
+  shows state (Loading / Synthesizing selection… / Speaking / Paused).
+  **Clicking** the status item opens a control popup with **Play/Pause · Stop ·
+  Config** (in that order); it also pops up automatically while audio is playing
+  so the controls are visible without hovering (toggle with
+  `kokoroSpeak.showControlsWhilePlaying`). The hover tooltip still offers the same
+  command links. (VS Code status items don't support a right-click action, and
+  tooltips can't be pinned open — hence the click-to-open popup.)
 - Markdown preview is handled: the keybinding works there and the underlying
   document is spoken with Markdown syntax stripped (`src/textprep.ts`).
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),
