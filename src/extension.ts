@@ -584,14 +584,14 @@ function setStatus(phase: Phase, detail?: string) {
   status.tooltip = tip;
   status.show();
 
-  // Open the bottom-right control toast as soon as playback begins, so the
-  // controls appear without hovering. showControls() guards against duplicates,
-  // so this is a no-op while a toast is already up.
-  const busy = phase !== "idle" && phase !== "error";
+  // Auto-open the control toast only when audio actually starts playing — not
+  // during load/synthesis, where a "Pause" button would be misleading and the
+  // toast (which can't be updated) would then be stuck showing the wrong state.
+  // showControls() guards against duplicates, so this is a no-op if one is up.
   const autoShow = vscode.workspace
     .getConfiguration("kokoroSpeak")
     .get<boolean>("showControlsWhilePlaying", true);
-  if (busy && autoShow) void showControls();
+  if (phase === "speaking" && autoShow) void showControls();
 }
 
 /**
@@ -606,12 +606,16 @@ async function showControls() {
   controlToastOpen = true;
   try {
     for (;;) {
-      const idle = currentPhase === "idle" || currentPhase === "error";
+      // Buttons reflect the real phase at show time. (A toast can't be updated,
+      // so if the phase changes via the keybinding or playback ending, click the
+      // status item to reopen with the correct controls.)
+      const stoppable = currentPhase !== "idle" && currentPhase !== "error";
       const buttons: string[] = [];
-      if (currentPhase === "paused") buttons.push("Resume");
-      else if (idle) buttons.push("Play"); // speak the clipboard
-      else buttons.push("Pause"); // speaking / synthesizing / loading
-      if (!idle) buttons.push("Stop");
+      if (currentPhase === "speaking") buttons.push("Pause");
+      else if (currentPhase === "paused") buttons.push("Resume");
+      else if (!stoppable) buttons.push("Play"); // idle/error → speak clipboard
+      // loading / synthesizing: nothing is playing yet, so no Play/Pause button.
+      if (stoppable) buttons.push("Stop");
       buttons.push("Config");
 
       const pick = await vscode.window.showInformationMessage(
