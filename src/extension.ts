@@ -44,7 +44,6 @@ type Phase =
 let status: vscode.StatusBarItem;
 let player: StreamPlayer | undefined;
 let currentPhase: Phase = "idle";
-let controlToastOpen = false;
 let modelReady = false;
 let extContext: vscode.ExtensionContext;
 let tempSeq = 0;
@@ -58,7 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.StatusBarAlignment.Right,
     100
   );
-  status.command = "kokoroSpeak.showControls";
+  status.command = "kokoroSpeak.statusClick";
   setStatus("idle");
   context.subscriptions.push(status);
 
@@ -95,7 +94,12 @@ export function activate(context: vscode.ExtensionContext) {
       player = undefined;
       setStatus("idle");
     }),
-    vscode.commands.registerCommand("kokoroSpeak.showControls", showControls),
+    vscode.commands.registerCommand("kokoroSpeak.statusClick", () => {
+      // Click toggles Pause/Resume while active; speaks the clipboard when idle.
+      // Full controls live in the hover tooltip. (No floating popup.)
+      if (player?.isActive) vscode.commands.executeCommand("kokoroSpeak.pause");
+      else vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
+    }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
     vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
     vscode.commands.registerCommand("kokoroSpeak.configure", configure),
@@ -563,8 +567,9 @@ function setStatus(phase: Phase, detail?: string) {
   };
   const { icon, label } = map[phase];
   status.text = `$(${icon}) ${detail ?? label}`;
-  // Left click runs the command (Stop). Right-click isn't supported on status
-  // items, so Pause/Resume is offered as a trusted command link in the tooltip.
+  // Clicking the item toggles Pause/Resume (or speaks the clipboard when idle);
+  // the full controls are trusted command links in this hover tooltip, since
+  // status items support only a single click action and no right-click.
   const active = phase === "speaking" || phase === "paused";
   const tip = new vscode.MarkdownString(undefined, true);
   tip.isTrusted = true;
@@ -580,50 +585,13 @@ function setStatus(phase: Phase, detail?: string) {
     " · [$(debug-stop) Stop](command:kokoroSpeak.stop)" +
       " · [$(gear) Config](command:kokoroSpeak.configure)"
   );
-  tip.appendMarkdown("\n\n_Click the item for controls._");
+  tip.appendMarkdown(
+    active
+      ? "\n\n_Click to pause/resume._"
+      : "\n\n_Click to speak the clipboard._"
+  );
   status.tooltip = tip;
   status.show();
-}
-
-/**
- * Bottom-right control toast with **Play/Pause · Stop · Config** (in that order),
- * and the status-item click action. VS Code notifications can't be updated or
- * closed from code, so the toast re-shows itself after Pause/Resume (each click
- * dismisses the old toast); a dismiss or auto-hide ends it — click the status
- * item to reopen.
- */
-async function showControls() {
-  if (controlToastOpen) return; // don't stack toasts on repeated clicks
-  controlToastOpen = true;
-  try {
-    // On-demand popup (status-item click). Buttons reflect the phase at click
-    // time; picking one runs it and closes the toast. A notification can't be
-    // updated, so to act again (e.g. Pause then Stop) click the status item
-    // again — the fresh toast shows the correct controls for the new state.
-    const stoppable = currentPhase !== "idle" && currentPhase !== "error";
-    const buttons: string[] = [];
-    if (currentPhase === "speaking") buttons.push("Pause");
-    else if (currentPhase === "paused") buttons.push("Resume");
-    else if (!stoppable) buttons.push("Play"); // idle/error → speak clipboard
-    // loading / synthesizing: nothing is playing yet, so no Play/Pause button.
-    if (stoppable) buttons.push("Stop");
-    buttons.push("Config");
-
-    const pick = await vscode.window.showInformationMessage(
-      "Kokoro TTS",
-      ...buttons
-    );
-    if (pick === "Pause" || pick === "Resume")
-      await vscode.commands.executeCommand("kokoroSpeak.pause");
-    else if (pick === "Play")
-      await vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
-    else if (pick === "Stop")
-      await vscode.commands.executeCommand("kokoroSpeak.stop");
-    else if (pick === "Config")
-      await vscode.commands.executeCommand("kokoroSpeak.configure");
-  } finally {
-    controlToastOpen = false;
-  }
 }
 
 // Kokoro v1.0 voices (a=American, b=British; f=female, m=male).

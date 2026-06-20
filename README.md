@@ -35,11 +35,11 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
   press it), **Pause/Resume** (`Cmd/Ctrl+Alt+P`), **Stop**
   (`Cmd/Ctrl+Alt+X`), right-click **Speak Selection**, and a status-bar item that
   shows state (Loading / Synthesizing selection… / Speaking / Paused).
-  **Clicking** the status item opens a bottom-right control toast with
-  **Play/Pause · Stop · Config** (in that order); pick one and it runs. The hover
-  tooltip offers the same command links. (VS Code notifications can't be updated
-  or pinned, so the toast is on-demand and closes after you pick an action —
-  click the status item again to get the controls for the new state.)
+  **Clicking** the status item toggles **Pause/Resume** while playing (and speaks
+  the clipboard when idle). The full controls — **Speak clipboard · Pause/Resume ·
+  Stop · Config** — are command links in the item's **hover tooltip** (status
+  items support only one click action and no right-click, and VS Code can't pin a
+  popup open, so the tooltip is the control surface).
 - Markdown preview is handled: the keybinding works there and the underlying
   document is spoken with Markdown syntax stripped (`src/textprep.ts`).
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),
