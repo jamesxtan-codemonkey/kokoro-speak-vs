@@ -7,7 +7,41 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { readWav, resample } = require("./.pcmplayer.cjs");
+const { readWav, resample, PcmStreamPlayer } = require("./.pcmplayer.cjs");
+
+// A fake audify module: records device calls and lets the test drive the
+// per-frame "finished playing" callback, so the streaming/pause logic can be
+// tested without real audio hardware.
+function fakeAudify() {
+  const calls = { started: 0, stopped: 0, writes: 0, cleared: 0, closed: 0 };
+  let frameCb = null;
+  class RtAudio {
+    getDefaultOutputDevice() {
+      return 1;
+    }
+    getDevices() {
+      return [{ id: 1, name: "fake", outputChannels: 2, sampleRates: [48000], preferredSampleRate: 48000 }];
+    }
+    openStream(_op, _ip, _fmt, _rate, _frame, _name, _inCb, outCb) {
+      frameCb = outCb;
+    }
+    start() { calls.started++; }
+    stop() { calls.stopped++; }
+    write() { calls.writes++; }
+    clearOutputQueue() { calls.cleared++; }
+    closeStream() { calls.closed++; }
+  }
+  return {
+    mod: { RtAudio, RtAudioFormat: { RTAUDIO_SINT16: 2 } },
+    calls,
+    playFrames: (n) => { for (let i = 0; i < n; i++) frameCb && frameCb(); },
+  };
+}
+
+// 2880 samples @24k → 5760 @48k → exactly 6 frames of 960 samples. No leftover.
+function sixFrameWav() {
+  return makeWav(new Array(2880).fill(1000), 24000);
+}
 
 // Build a 16-bit PCM mono WAV the same way encodeWavPCM16 does.
 function makeWav(samples, rate) {
@@ -59,4 +93,74 @@ test("resample is a no-op when rates match, and handles empty input", () => {
 test("resample clamps to int16 range", () => {
   const out = resample(Int16Array.from([32767, -32768]), 24000, 48000);
   for (const v of out) assert.ok(v >= -32768 && v <= 32767, `out of range: ${v}`);
+});
+
+test("push writes frames ahead and starts the stream", () => {
+  const { mod, calls } = fakeAudify();
+  const p = PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() {}, onUnavailable() {} }, mod);
+  assert.ok(p, "should create with the fake audify module");
+  p.push(sixFrameWav(), 0.12);
+  assert.equal(calls.started, 1, "started on first push");
+  assert.equal(calls.writes, 6, "wrote all 6 frames ahead (gapless during synth)");
+  assert.equal(p.isActive, true);
+  p.stop();
+});
+
+test("pause clears the queue + stops; resume re-sends only the unplayed frames", () => {
+  const { mod, calls, playFrames } = fakeAudify();
+  const p = PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() {}, onUnavailable() {} }, mod);
+  p.push(sixFrameWav(), 0.12); // 6 frames written
+  playFrames(2); // device plays 2 frames
+
+  assert.equal(p.togglePause(), "paused");
+  assert.equal(p.isPaused, true);
+  assert.equal(calls.cleared, 1, "pause cleared the output queue (instant silence)");
+  assert.ok(calls.stopped >= 1, "pause stopped the stream");
+  assert.equal(p.isActive, true, "still active while paused");
+
+  const before = calls.writes; // 6
+  assert.equal(p.togglePause(), "speaking");
+  assert.equal(p.isPaused, false);
+  assert.equal(calls.writes - before, 4, "resume re-sent exactly the 4 unplayed frames (2..6)");
+  assert.ok(calls.started >= 2, "resume started the stream again");
+  p.stop();
+});
+
+test("onIdle fires only after the final frame finishes playing", () => {
+  const { mod, playFrames } = fakeAudify();
+  let idled = false;
+  const p = PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() { idled = true; }, onUnavailable() {} }, mod);
+  p.push(sixFrameWav(), 0.12);
+  p.end();
+  assert.equal(idled, false, "not idle until frames play");
+  playFrames(5);
+  assert.equal(idled, false, "still one frame to go");
+  playFrames(1);
+  assert.equal(idled, true, "idle after all 6 frames played");
+  assert.equal(p.isActive, false);
+});
+
+test("pause does not lose audio: total writes cover every frame exactly once after resume", () => {
+  const { mod, calls, playFrames } = fakeAudify();
+  const p = PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() {}, onUnavailable() {} }, mod);
+  p.push(sixFrameWav(), 0.12); // frames 0..5 written once (6)
+  playFrames(3); // 0,1,2 played
+  p.togglePause(); // clears 3,4,5
+  p.togglePause(); // re-writes 3,4,5 (3)
+  assert.equal(calls.writes, 6 + 3, "frames 3,4,5 written again on resume — nothing skipped");
+  p.stop();
+});
+
+test("stop closes the stream and goes inactive", () => {
+  const { mod, calls } = fakeAudify();
+  const p = PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() {}, onUnavailable() {} }, mod);
+  p.push(sixFrameWav(), 0.12);
+  p.stop();
+  assert.ok(calls.closed >= 1, "stop closed the stream");
+  assert.equal(p.isActive, false);
+  assert.equal(p.isPaused, false);
+});
+
+test("tryCreate returns null when audify is unavailable (→ afplay fallback)", () => {
+  assert.equal(PcmStreamPlayer.tryCreate({ onSpeaking() {}, onIdle() {}, onUnavailable() {} }, null), null);
 });

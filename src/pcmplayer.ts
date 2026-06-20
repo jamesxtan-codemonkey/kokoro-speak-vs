@@ -1,11 +1,18 @@
 // macOS-first PCM streaming via audify (RtAudio → CoreAudio). One persistent
-// output stream that we write int16 frames into as sentences synthesize, for
-// native gapless playback with EXACT pause/resume and instant stop — none of the
-// afplay/CoreAudio buffering that made the file-based player laggy.
+// output stream that we write 16-bit PCM frames into as sentences synthesize, for
+// native gapless playback with exact pause/resume and instant stop.
 //
-// audify is a native N-API addon (ABI-stable, prebuilt), loaded lazily so a load
-// failure degrades to the file-based player (see extension.ts) instead of
-// crashing. Kept free of `vscode` imports so the pure helpers can be unit-tested.
+// Why we keep every frame and write it all ahead: synthesis (onnxruntime, ~3x)
+// runs on the main thread and blocks the event loop, so we can't rely on a
+// just-in-time feed — we push the whole utterance into audify's queue and its own
+// audio thread plays it smoothly regardless. The catch is that audify.stop()
+// DRAINS the queue, so it can't pause a full queue. Instead, pause =
+// clearOutputQueue() + stop() (instant), and resume = re-write the not-yet-played
+// frames (tracked via the per-frame output callback) and start() again.
+//
+// audify is a native N-API addon (ABI-stable, prebuilt), injected/loaded lazily
+// so a load failure degrades to the file-based player (see extension.ts) instead
+// of crashing. Kept free of `vscode` imports so it can be unit-tested.
 
 export interface AudioCallbacks {
   onSpeaking: () => void;
@@ -77,22 +84,24 @@ export class PcmStreamPlayer implements AudioPlayer {
   private rate = 48000; // device output rate
   private frameSamples = 960;
   private frameBytes = 1920;
+  private frames: Buffer[] = []; // every produced frame, retained for replay
   private acc: Buffer = Buffer.alloc(0); // bytes not yet a full frame
-  private writtenSamples = 0; // total device-rate samples handed to the device
-  private startedAt = 0;
-  private pausedAccum = 0; // total ms spent paused
-  private pauseStart = 0;
+  private writeIndex = 0; // next frame index to write to the device
+  private playIndex = 0; // frames the device reports finished playing
   private started = false;
   private paused = false;
   private stopped = false;
   private completed = false;
   private synthDone = false;
-  private doneTimer: ReturnType<typeof setTimeout> | undefined;
+  private backstop: ReturnType<typeof setInterval> | undefined;
 
   /** Open a CoreAudio output stream, or return null if audify/the device is
-   *  unavailable so the caller can fall back to the file-based player. */
-  static tryCreate(cb: AudioCallbacks): PcmStreamPlayer | null {
-    const mod = loadAudify();
+   *  unavailable so the caller can fall back to the file-based player.
+   *  `mod` is injectable for tests. */
+  static tryCreate(
+    cb: AudioCallbacks,
+    mod: any = loadAudify()
+  ): PcmStreamPlayer | null {
     if (!mod) return null;
     try {
       return new PcmStreamPlayer(cb, mod);
@@ -110,7 +119,6 @@ export class PcmStreamPlayer implements AudioPlayer {
     const id = this.rt.getDefaultOutputDevice();
     const dev = this.rt.getDevices().find((d: any) => d.id === id);
     if (!dev) throw new Error("no default output device");
-    // Prefer 48 kHz (a clean 2× of Kokoro's 24 kHz); else the device default.
     const rates: number[] = dev.sampleRates ?? [];
     this.rate = rates.includes(48000) ? 48000 : dev.preferredSampleRate || 48000;
     this.frameSamples = Math.max(1, Math.round(this.rate * 0.02)); // ~20 ms
@@ -122,7 +130,9 @@ export class PcmStreamPlayer implements AudioPlayer {
       this.rate,
       this.frameSamples,
       "Kokoro Speak",
-      null,
+      null, // inputCallback
+      () => this.onFramePlayed(), // frameOutputCallback: one call per frame played
+      0,
       null
     );
   }
@@ -138,71 +148,58 @@ export class PcmStreamPlayer implements AudioPlayer {
     if (this.stopped || this.completed) return;
     const { samples, rate } = readWav(wav);
     const pcm = resample(samples, rate, this.rate);
-    const bytes = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    this.acc = this.acc.length ? Buffer.concat([this.acc, bytes]) : Buffer.from(bytes);
+    let bytes: Buffer = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    if (this.acc.length) bytes = Buffer.concat([this.acc, bytes]);
+    let off = 0;
+    while (bytes.length - off >= this.frameBytes) {
+      // Copy: subarray shares memory with the transient `bytes`.
+      this.frames.push(Buffer.from(bytes.subarray(off, off + this.frameBytes)));
+      off += this.frameBytes;
+    }
+    this.acc = off < bytes.length ? Buffer.from(bytes.subarray(off)) : Buffer.alloc(0);
+    this.pump();
+  }
+
+  /** Start on first data, then write every not-yet-written frame to the device. */
+  private pump(): void {
+    if (this.stopped || this.completed || this.paused) return;
     if (!this.started) {
       this.started = true;
-      this.startedAt = Date.now();
       this.rt.start();
       this.cb.onSpeaking();
     }
-    this.drain(false);
-  }
-
-  /** Write whole frames to the device; on `final`, pad the last partial frame. */
-  private drain(final: boolean): void {
-    let off = 0;
-    while (this.acc.length - off >= this.frameBytes) {
-      this.rt.write(this.acc.subarray(off, off + this.frameBytes));
-      off += this.frameBytes;
-      this.writtenSamples += this.frameSamples;
-    }
-    this.acc = off ? Buffer.from(this.acc.subarray(off)) : this.acc;
-    if (final && this.acc.length) {
-      const pad = Buffer.alloc(this.frameBytes - this.acc.length, 0);
-      this.rt.write(Buffer.concat([this.acc, pad]));
-      this.writtenSamples += this.frameSamples;
-      this.acc = Buffer.alloc(0);
+    while (this.writeIndex < this.frames.length) {
+      this.rt.write(this.frames[this.writeIndex]);
+      this.writeIndex++;
     }
   }
 
   end(): void {
     if (this.stopped || this.completed) return;
     this.synthDone = true;
+    if (this.acc.length) {
+      const pad = Buffer.alloc(this.frameBytes - this.acc.length, 0);
+      this.frames.push(Buffer.concat([this.acc, pad]));
+      this.acc = Buffer.alloc(0);
+    }
+    this.pump();
     if (!this.started) {
-      // Nothing was ever queued (e.g. empty/whitespace text).
-      this.completed = true;
-      this.cleanup();
-      this.cb.onIdle();
+      // Nothing was ever queued (empty/whitespace text).
+      this.finish();
       return;
     }
-    this.drain(true);
-    this.scheduleDone();
+    this.startBackstop();
+    this.maybeFinish();
   }
 
-  private activePlayedMs(): number {
-    const ref = this.paused ? this.pauseStart : Date.now();
-    return Math.max(0, ref - this.startedAt - this.pausedAccum);
-  }
-
-  /** Playback is continuous (synthesis stays ahead of realtime), so the end time
-   *  is just startedAt + audioDuration + time spent paused. Fire onIdle then. */
-  private scheduleDone(): void {
-    if (this.doneTimer) {
-      clearTimeout(this.doneTimer);
-      this.doneTimer = undefined;
-    }
-    if (!this.synthDone || this.paused || this.stopped) return;
-    const totalMs = (this.writtenSamples / this.rate) * 1000;
-    const remaining = Math.max(0, totalMs - this.activePlayedMs());
-    this.doneTimer = setTimeout(() => this.finish(), remaining + 80);
-  }
-
-  private finish(): void {
+  private onFramePlayed(): void {
     if (this.stopped || this.completed) return;
-    this.completed = true;
-    this.cleanup();
-    this.cb.onIdle();
+    this.playIndex++;
+    this.maybeFinish();
+  }
+
+  private maybeFinish(): void {
+    if (this.synthDone && this.playIndex >= this.frames.length) this.finish();
   }
 
   togglePause(): "speaking" | "paused" {
@@ -215,45 +212,75 @@ export class PcmStreamPlayer implements AudioPlayer {
   }
 
   private pause(): void {
-    if (!this.started || this.stopped || this.paused || this.completed) return;
+    if (!this.started || this.stopped || this.completed || this.paused) return;
     this.paused = true;
-    this.pauseStart = Date.now();
-    if (this.doneTimer) {
-      clearTimeout(this.doneTimer);
-      this.doneTimer = undefined;
+    this.stopBackstop();
+    // Drop the queued (unplayed) frames and halt output now — instant silence.
+    try {
+      this.rt.clearOutputQueue();
+    } catch {
+      /* ignore */
     }
-    // stop() halts the device output immediately at the exact sample; the queued
-    // audio is retained, so start() resumes from precisely where we left off.
     try {
       this.rt.stop();
     } catch {
       /* ignore */
     }
+    // Resume must re-send everything from the frame that was actually playing.
+    this.writeIndex = this.playIndex;
   }
 
   private resume(): void {
     if (!this.paused) return;
-    this.pausedAccum += Date.now() - this.pauseStart;
     this.paused = false;
     try {
       this.rt.start();
     } catch {
       /* ignore */
     }
-    this.scheduleDone();
+    this.pump(); // re-writes frames[playIndex .. end]
+    if (this.synthDone) this.startBackstop();
   }
 
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    if (this.doneTimer) {
-      clearTimeout(this.doneTimer);
-      this.doneTimer = undefined;
-    }
+    this.stopBackstop();
     this.cleanup();
   }
 
+  private finish(): void {
+    if (this.stopped || this.completed) return;
+    this.completed = true;
+    this.stopBackstop();
+    this.cb.onIdle();
+    // Tear the stream down off the callback stack.
+    setImmediate(() => this.cleanup());
+  }
+
+  // Safety net: if the per-frame callback ever misses the final frame, this still
+  // settles the status shortly after playback should have finished.
+  private startBackstop(): void {
+    this.stopBackstop();
+    this.backstop = setInterval(() => {
+      if (!this.paused && this.synthDone && this.playIndex >= this.frames.length) {
+        this.finish();
+      }
+    }, 200);
+  }
+  private stopBackstop(): void {
+    if (this.backstop) {
+      clearInterval(this.backstop);
+      this.backstop = undefined;
+    }
+  }
+
   private cleanup(): void {
+    try {
+      this.rt.clearOutputQueue();
+    } catch {
+      /* ignore */
+    }
     try {
       this.rt.stop();
     } catch {
