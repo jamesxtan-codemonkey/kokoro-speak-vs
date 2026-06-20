@@ -263,3 +263,28 @@ test("pause during a buffer underrun, then resume, does not double-spawn (echo r
   assertNoEcho(spawns, 100); // each once, and "b"/"c" not overlapping
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("stop kills the currently playing segment immediately (no audio tail)", { timeout: 2000 }, async () => {
+  const dir = tempDir();
+  const wav = join(dir, "seg.wav");
+  const marker = join(dir, "finished");
+  writeFileSync(wav, "fake");
+
+  // The fake player writes a marker when its "audio" finishes (after 300ms).
+  // If stop kills it promptly, the marker is never written — playback ended.
+  const player = new StreamPlayer(
+    { onSpeaking() {}, onIdle() {}, onUnavailable() { assert.fail("node player should exist"); } },
+    () => [[process.execPath, ["-e", "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'done'), 300)", marker]]]
+  );
+
+  player.add(wav, 0.3);
+  player.end();
+  await delay(60); // mid-playback
+  player.stop();
+  await delay(400); // past the 300ms "audio"
+
+  assert.equal(existsSync(marker), false, "playing segment kept going after stop");
+  assert.equal(player.isActive, false);
+  assert.equal(existsSync(wav), false); // file cleaned up
+  rmSync(dir, { recursive: true, force: true });
+});

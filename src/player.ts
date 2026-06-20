@@ -58,8 +58,12 @@ class SegmentHandle {
 
   cancel() {
     this.cancelled = true;
+    // SIGCONT first so a paused (SIGSTOP'd) player can receive the kill now;
+    // then SIGKILL — afplay (and some other players) can sit blocked in a
+    // CoreAudio call and respond slowly to SIGTERM, so audio keeps playing after
+    // Stop. SIGKILL is uncatchable and stops the process immediately.
     safeKill(this.current, "SIGCONT");
-    safeKill(this.current);
+    safeKill(this.current, "SIGKILL");
   }
 }
 
