@@ -14,6 +14,11 @@
 // so a load failure degrades to the file-based player (see extension.ts) instead
 // of crashing. Kept free of `vscode` imports so it can be unit-tested.
 
+import * as os from "os";
+import * as fs from "fs";
+import * as path from "path";
+import { StreamPlayer } from "./player";
+
 export interface AudioCallbacks {
   onSpeaking: () => void;
   onIdle: () => void;
@@ -292,4 +297,54 @@ export class PcmStreamPlayer implements AudioPlayer {
       /* ignore */
     }
   }
+}
+
+// ---- file-based fallback (OS CLI players) ---------------------------------
+
+let tempSeq = 0;
+
+/** Write a WAV segment to a unique temp file and return its path. */
+export function writeTemp(wav: Buffer): string {
+  const file = path.join(
+    os.tmpdir(),
+    `kokoro-speak-${process.pid}-${tempSeq++}.wav`
+  );
+  fs.writeFileSync(file, wav);
+  return file;
+}
+
+/**
+ * Fallback player: writes each WAV segment to a temp file and plays it with the
+ * OS CLI player (afplay/paplay/…). Used when native PCM streaming is
+ * unavailable. Adapts the file-based StreamPlayer to the AudioPlayer surface.
+ */
+export class FileAudioPlayer implements AudioPlayer {
+  private sp: StreamPlayer;
+  constructor(cb: AudioCallbacks) {
+    this.sp = new StreamPlayer(cb);
+  }
+  push(wav: Buffer, dur: number) {
+    this.sp.add(writeTemp(wav), dur);
+  }
+  end() {
+    this.sp.end();
+  }
+  togglePause() {
+    return this.sp.togglePause();
+  }
+  stop() {
+    this.sp.stop();
+  }
+  get isActive() {
+    return this.sp.isActive;
+  }
+  get isPaused() {
+    return this.sp.isPaused;
+  }
+}
+
+/** Prefer native PCM streaming (audify → CoreAudio); fall back to the file
+ *  player if audify can't load or there's no output device. */
+export function createPlayer(cb: AudioCallbacks): AudioPlayer {
+  return PcmStreamPlayer.tryCreate(cb) ?? new FileAudioPlayer(cb);
 }

@@ -9,6 +9,7 @@ test/.normalize.cjs
 test/.textprep.cjs
 test/.player.cjs
 test/.pcmplayer.cjs
+test/.mcp.cjs
 out/
 out.log
 *.vsix

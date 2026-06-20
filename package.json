@@ -16,6 +16,9 @@
     "url": "https://github.com/jamesxtan-codemonkey/kokoro-speak-vs.git"
   },
   "main": "./dist/extension.js",
+  "bin": {
+    "kokoro-speak-mcp": "./dist/mcp.js"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -74,20 +77,42 @@
           "type": "string",
           "default": "af_heart",
           "enum": [
-            "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica",
-            "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
-            "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
-            "am_michael", "am_onyx", "am_puck", "am_santa",
-            "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
-            "bm_daniel", "bm_fable", "bm_george", "bm_lewis"
+            "af_heart",
+            "af_alloy",
+            "af_aoede",
+            "af_bella",
+            "af_jessica",
+            "af_kore",
+            "af_nicole",
+            "af_nova",
+            "af_river",
+            "af_sarah",
+            "af_sky",
+            "am_adam",
+            "am_echo",
+            "am_eric",
+            "am_fenrir",
+            "am_liam",
+            "am_michael",
+            "am_onyx",
+            "am_puck",
+            "am_santa",
+            "bf_alice",
+            "bf_emma",
+            "bf_isabella",
+            "bf_lily",
+            "bm_daniel",
+            "bm_fable",
+            "bm_george",
+            "bm_lewis"
           ],
           "description": "Kokoro voice (a=American, b=British; f=female, m=male)."
         },
         "kokoroSpeak.speed": {
           "type": "number",
-          "default": 1.0,
+          "default": 1,
           "minimum": 0.5,
-          "maximum": 2.0,
+          "maximum": 2,
           "description": "Speaking rate multiplier (0.5–2.0)."
         },
         "kokoroSpeak.bufferSeconds": {
@@ -99,7 +124,11 @@
         "kokoroSpeak.normalization.mode": {
           "type": "string",
           "default": "deterministic",
-          "enum": ["off", "deterministic", "ai"],
+          "enum": [
+            "off",
+            "deterministic",
+            "ai"
+          ],
           "enumDescriptions": [
             "No normalization (Markdown is still stripped).",
             "Built-in local rules + your replacements. Offline, instant, private.",
@@ -120,11 +149,21 @@
           "items": {
             "type": "object",
             "properties": {
-              "from": { "type": "string" },
-              "to": { "type": "string" },
-              "pattern": { "type": "string" },
-              "replacement": { "type": "string" },
-              "flags": { "type": "string" }
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              },
+              "replacement": {
+                "type": "string"
+              },
+              "flags": {
+                "type": "string"
+              }
             }
           }
         },
@@ -132,12 +171,18 @@
           "type": "array",
           "default": [],
           "description": "Acronyms to read letter by letter, e.g. [\"API\", \"LFP\"] → \"A P I\", \"L F P\". Applied in every mode (whole words only).",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "kokoroSpeak.normalization.backend": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "cli", "api"],
+          "enum": [
+            "auto",
+            "cli",
+            "api"
+          ],
           "enumDescriptions": [
             "Detect a local CLI (claude → codex); else use the API key if set.",
             "Use a local CLI agent (set 'command', e.g. claude or codex). No API key needed.",
@@ -198,18 +243,21 @@
   "scripts": {
     "spike": "node scripts/spike.mjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --outfile=dist/extension.js",
+    "build:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=cjs --external:audify --banner:js='#!/usr/bin/env node' --outfile=dist/mcp.js && chmod +x dist/mcp.js",
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js",
     "package": "vsce package",
     "clean": "rm -rf dist *.vsix",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "audify": "^1.10.1",
-    "kokoro-js": "^1.2.0"
+    "kokoro-js": "^1.2.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@huggingface/transformers": "3.8.1",

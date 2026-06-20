@@ -1,15 +1,8 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { getSpeakableText } from "./textprep";
-import { StreamPlayer } from "./player";
-import {
-  AudioPlayer,
-  AudioCallbacks,
-  PcmStreamPlayer,
-} from "./pcmplayer";
+import { AudioPlayer, AudioCallbacks, createPlayer } from "./pcmplayer";
 import { loadModel, synthesize } from "./synth";
+import { VOICES, isVoice } from "./voices";
 import {
   normalize,
   NormMode,
@@ -51,7 +44,6 @@ let player: AudioPlayer | undefined;
 let currentPhase: Phase = "idle";
 let modelReady = false;
 let extContext: vscode.ExtensionContext;
-let tempSeq = 0;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
 let activeReq = 0;
@@ -192,9 +184,9 @@ function speak(text: string | undefined, what: string) {
     },
   };
   // Prefer native PCM streaming (audify → CoreAudio): exact pause/resume, instant
-  // stop, gapless, no temp files. Fall back to the file-based player if audify
+  // stop, gapless, no temp files. Falls back to the file-based player if audify
   // can't load or there's no output device.
-  const sp: AudioPlayer = PcmStreamPlayer.tryCreate(cb) ?? new FileAudioPlayer(cb);
+  const sp: AudioPlayer = createPlayer(cb);
   player = sp;
 
   // Show "we're on it" synchronously, the instant play is pressed — prepareText
@@ -424,7 +416,7 @@ async function renderAsk(ask: Ask): Promise<string | undefined> {
 // or out-of-range value would corrupt playback/normalization, so only well-typed
 // values are persisted (voice must be a real id; speed within range).
 const NORM_VALID: Record<string, (v: unknown) => boolean> = {
-  "kokoroSpeak.voice": (v) => typeof v === "string" && VOICES.includes(v),
+  "kokoroSpeak.voice": (v) => typeof v === "string" && isVoice(v),
   "kokoroSpeak.speed": (v) => typeof v === "number" && v >= 0.5 && v <= 2.0,
   "kokoroSpeak.normalization.mode": (v) =>
     v === "off" || v === "deterministic" || v === "ai",
@@ -558,43 +550,6 @@ function resolveSource(opts?: {
     : undefined;
 }
 
-/** Write a WAV segment to a unique temp file and return its path. */
-function writeTemp(wav: Buffer): string {
-  const file = path.join(
-    os.tmpdir(),
-    `kokoro-speak-${process.pid}-${tempSeq++}.wav`
-  );
-  fs.writeFileSync(file, wav);
-  return file;
-}
-
-/** Fallback player: writes each WAV segment to a temp file and plays it with the
- *  OS CLI player (afplay/paplay/…). Used when native PCM streaming is
- *  unavailable. Adapts the file-based StreamPlayer to the AudioPlayer surface. */
-class FileAudioPlayer implements AudioPlayer {
-  private sp: StreamPlayer;
-  constructor(cb: AudioCallbacks) {
-    this.sp = new StreamPlayer(cb);
-  }
-  push(wav: Buffer, dur: number) {
-    this.sp.add(writeTemp(wav), dur);
-  }
-  end() {
-    this.sp.end();
-  }
-  togglePause() {
-    return this.sp.togglePause();
-  }
-  stop() {
-    this.sp.stop();
-  }
-  get isActive() {
-    return this.sp.isActive;
-  }
-  get isPaused() {
-    return this.sp.isPaused;
-  }
-}
 
 function setStatus(phase: Phase, detail?: string) {
   if (!status) return;
@@ -638,13 +593,3 @@ function setStatus(phase: Phase, detail?: string) {
   status.tooltip = tip;
   status.show();
 }
-
-// Kokoro v1.0 voices (a=American, b=British; f=female, m=male).
-const VOICES = [
-  "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore",
-  "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
-  "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
-  "am_onyx", "am_puck", "am_santa",
-  "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
-  "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
-];

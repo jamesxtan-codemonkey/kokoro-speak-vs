@@ -93,6 +93,16 @@ user settings). Update the `.md` to change the menu, the questions, or how
 requests map to settings — no code change. Falls back to the Settings UI if no
 backend is available.
 
+## Voice for AI agents (MCP)
+
+A standalone MCP server (`kokoro-speak-mcp`) lets an MCP-capable agent — Claude
+Code, the Codex VS Code extension, Claude Desktop — **speak its replies aloud or
+join a spoken discussion** by calling a `speak` tool. It reuses the same
+vscode-free core (`src/speaker.ts`) and keeps the model warm. Build with
+`npm run build:mcp` (→ `dist/mcp.js`), register it with your agent, and
+optionally add the [speak-aloud skill](skills/speak-aloud.md) so it speaks
+proactively. Full setup: [docs/mcp-voice.md](docs/mcp-voice.md).
+
 ## Verification
 
 `npm test` runs a partial end-to-end round-trip: **text → Kokoro TTS → audio →
