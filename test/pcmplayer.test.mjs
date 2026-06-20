@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { readWav, resample, PcmStreamPlayer } = require("./.pcmplayer.cjs");
+const { readWav, resample, toChannelBytes, PcmStreamPlayer } = require("./.pcmplayer.cjs");
 
 // A fake audify module: records device calls and lets the test drive the
 // per-frame "finished playing" callback, so the streaming/pause logic can be
@@ -93,6 +93,20 @@ test("resample is a no-op when rates match, and handles empty input", () => {
 test("resample clamps to int16 range", () => {
   const out = resample(Int16Array.from([32767, -32768]), 24000, 48000);
   for (const v of out) assert.ok(v >= -32768 && v <= 32767, `out of range: ${v}`);
+});
+
+test("toChannelBytes duplicates mono to L+R for stereo (both speakers)", () => {
+  const stereo = toChannelBytes(Int16Array.from([1, 2, 3]), 2);
+  assert.equal(stereo.length, 3 * 2 * 2); // 3 samples × 2 ch × 2 bytes
+  const got = [];
+  for (let i = 0; i < stereo.length; i += 2) got.push(stereo.readInt16LE(i));
+  assert.deepEqual(got, [1, 1, 2, 2, 3, 3]); // each sample on both channels
+});
+
+test("toChannelBytes leaves mono as-is for a 1-channel device", () => {
+  const mono = toChannelBytes(Int16Array.from([5, -7]), 1);
+  assert.equal(mono.length, 2 * 2);
+  assert.deepEqual([mono.readInt16LE(0), mono.readInt16LE(2)], [5, -7]);
 });
 
 test("push writes frames ahead and starts the stream", () => {

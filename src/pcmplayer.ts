@@ -84,9 +84,29 @@ export function resample(
   return out;
 }
 
+/** Pack mono int16 samples into little-endian bytes for `channels` output
+ *  channels. For stereo, each sample is duplicated to L and R so mono speech is
+ *  heard on both speakers. */
+export function toChannelBytes(mono: Int16Array, channels: number): Buffer {
+  if (channels <= 1) {
+    return Buffer.from(mono.buffer, mono.byteOffset, mono.byteLength);
+  }
+  const out = Buffer.alloc(mono.length * channels * 2);
+  let o = 0;
+  for (let i = 0; i < mono.length; i++) {
+    const v = mono[i];
+    for (let c = 0; c < channels; c++) {
+      out.writeInt16LE(v, o);
+      o += 2;
+    }
+  }
+  return out;
+}
+
 export class PcmStreamPlayer implements AudioPlayer {
   private rt: any;
   private rate = 48000; // device output rate
+  private channels = 2; // 2 = duplicate mono → L+R (else mono plays one speaker)
   private frameSamples = 960;
   private frameBytes = 1920;
   private frames: Buffer[] = []; // every produced frame, retained for replay
@@ -126,10 +146,13 @@ export class PcmStreamPlayer implements AudioPlayer {
     if (!dev) throw new Error("no default output device");
     const rates: number[] = dev.sampleRates ?? [];
     this.rate = rates.includes(48000) ? 48000 : dev.preferredSampleRate || 48000;
+    // Output stereo so mono speech is heard on BOTH speakers (a mono stream maps
+    // to one channel = left-only). Fall back to mono only for a mono-only device.
+    this.channels = (dev.outputChannels ?? 2) >= 2 ? 2 : 1;
     this.frameSamples = Math.max(1, Math.round(this.rate * 0.02)); // ~20 ms
-    this.frameBytes = this.frameSamples * 2;
+    this.frameBytes = this.frameSamples * this.channels * 2;
     this.rt.openStream(
-      { deviceId: id, nChannels: 1, firstChannel: 0 },
+      { deviceId: id, nChannels: this.channels, firstChannel: 0 },
       null,
       RtAudioFormat.RTAUDIO_SINT16,
       this.rate,
@@ -153,7 +176,7 @@ export class PcmStreamPlayer implements AudioPlayer {
     if (this.stopped || this.completed) return;
     const { samples, rate } = readWav(wav);
     const pcm = resample(samples, rate, this.rate);
-    let bytes: Buffer = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    let bytes = toChannelBytes(pcm, this.channels);
     if (this.acc.length) bytes = Buffer.concat([this.acc, bytes]);
     let off = 0;
     while (bytes.length - off >= this.frameBytes) {
