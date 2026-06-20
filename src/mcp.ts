@@ -21,7 +21,7 @@ import { VOICES, DEFAULT_VOICE, describeVoice } from "./voices";
 
 const speaker = new Speaker();
 
-const server = new McpServer({ name: "kokoro-speak", version: "0.0.1" });
+const server = new McpServer({ name: "kokoro-speak", version: "0.0.2" });
 
 server.registerTool(
   "speak",
