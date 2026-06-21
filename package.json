@@ -247,7 +247,7 @@
     "clean": "rm -rf dist *.vsix",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --format=cjs --outfile=test/.synth.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {

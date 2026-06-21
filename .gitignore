@@ -10,6 +10,7 @@ test/.textprep.cjs
 test/.player.cjs
 test/.pcmplayer.cjs
 test/.mcp.cjs
+test/.synth.cjs
 out/
 out.log
 *.vsix

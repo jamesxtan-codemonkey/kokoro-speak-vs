@@ -82,7 +82,59 @@ export interface SynthOptions {
   bufferSeconds?: number;
 }
 
-/** Stream `text` into concatenated WAV segments. Returns the sentence count. */
+// Kokoro truncates any single generation past its ~512-token cap. Kokoro's own
+// TextSplitterStream batches greedily and can hand the model an over-long chunk
+// (e.g. when sentence detection misses `." ` or a lowercase follower), silently
+// dropping the tail. So we chunk the text ourselves and generate per chunk, with
+// each chunk kept well under the cap.
+const MAX_CHUNK_CHARS = 250;
+
+/** Greedily pack a long sentence into <=maxChars pieces at word boundaries
+ *  (hard-splitting any single oversized token). */
+function packWords(s: string, maxChars: number): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (let p of s.split(/\s+/)) {
+    while (p.length > maxChars) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+      out.push(p.slice(0, maxChars));
+      p = p.slice(maxChars);
+    }
+    if (!cur) cur = p;
+    else if (cur.length + 1 + p.length <= maxChars) cur += " " + p;
+    else {
+      out.push(cur);
+      cur = p;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * Split text into synthesis-sized chunks so no single Kokoro generation exceeds
+ * its token cap (which would truncate, dropping the tail). Splits on sentence
+ * boundaries — `.`/`!`/`?` optionally followed by a closing quote/paren, then
+ * whitespace, plus newlines — then word-packs any still-too-long sentence.
+ */
+export function chunkText(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
+  const sentences = text
+    .split(/(?<=[.!?]["')\]]?)\s+/)
+    .flatMap((s) => s.split(/\n+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  for (const s of sentences) {
+    if (s.length <= maxChars) chunks.push(s);
+    else chunks.push(...packWords(s, maxChars));
+  }
+  return chunks;
+}
+
+/** Synthesize `text` into concatenated WAV segments. Returns the chunk count. */
 export async function synthesize(
   text: string,
   { voice = "af_heart", speed = 1, bufferSeconds = 0 }: SynthOptions,
@@ -91,16 +143,10 @@ export async function synthesize(
   const tts = await loadModel();
   if (cb.shouldCancel()) return 0;
 
-  const { TextSplitterStream } = await kokoro();
-  const splitter = new TextSplitterStream();
-  const stream = tts.stream(splitter, { voice: voice as any, speed });
-  splitter.push(text);
-  splitter.close();
-
   let parts: Float32Array[] = [];
   let bufferedSamples = 0;
   let rate = 24000;
-  let sentences = 0;
+  let count = 0;
 
   const flush = () => {
     if (!bufferedSamples) return;
@@ -115,22 +161,23 @@ export async function synthesize(
     bufferedSamples = 0;
   };
 
-  for await (const chunk of stream) {
-    if (cb.shouldCancel()) return sentences;
-    parts.push(chunk.audio.audio);
-    bufferedSamples += chunk.audio.audio.length;
-    rate = chunk.audio.sampling_rate;
-    sentences++;
-    cb.onProgress?.(sentences);
-    // bufferSeconds <= 0 → emit each sentence immediately (lowest latency;
-    // gapless seams handled by the streaming player). Otherwise group into
-    // ~bufferSeconds segments, capped so a huge doc still bounds memory.
+  for (const chunk of chunkText(text)) {
+    if (cb.shouldCancel()) return count;
+    const audio = await tts.generate(chunk, { voice: voice as any, speed });
+    parts.push(audio.audio);
+    bufferedSamples += audio.audio.length;
+    rate = audio.sampling_rate;
+    count++;
+    cb.onProgress?.(count);
+    // bufferSeconds <= 0 → emit each chunk immediately (lowest latency; gapless
+    // seams handled by the player). Otherwise group into ~bufferSeconds segments,
+    // capped so a huge doc still bounds memory.
     const haveSec = bufferedSamples / rate;
     if (bufferSeconds <= 0 || haveSec >= bufferSeconds || haveSec >= MAX_BUFFER_SEC) {
       flush();
     }
   }
-  if (cb.shouldCancel()) return sentences;
+  if (cb.shouldCancel()) return count;
   flush();
-  return sentences;
+  return count;
 }
