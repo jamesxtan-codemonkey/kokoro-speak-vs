@@ -18,10 +18,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { Speaker } from "./speaker";
 import { VOICES, DEFAULT_VOICE, describeVoice } from "./voices";
+// Single source of truth for the version (inlined from package.json at build).
+import { version } from "../package.json";
 
 const speaker = new Speaker();
 
-const server = new McpServer({ name: "kokoro-speak", version: "0.0.3" });
+const server = new McpServer({ name: "kokoro-speak", version });
 
 server.registerTool(
   "speak",

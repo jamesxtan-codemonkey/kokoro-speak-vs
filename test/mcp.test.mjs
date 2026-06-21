@@ -7,11 +7,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(here, ".mcp.cjs");
+const PKG_VERSION = JSON.parse(
+  readFileSync(join(here, "..", "package.json"), "utf8")
+).version;
 
 function startServer() {
   const srv = spawn(process.execPath, [SERVER], {
@@ -73,9 +77,11 @@ async function withServer(fn) {
   }
 }
 
-test("MCP server initializes and reports its identity", { timeout: 15000 }, async () => {
+test("MCP server initializes and reports its identity (version from package.json)", { timeout: 15000 }, async () => {
   await withServer(async ({ init }) => {
     assert.equal(init.result?.serverInfo?.name, "kokoro-speak");
+    // version is sourced from package.json (single source of truth)
+    assert.equal(init.result?.serverInfo?.version, PKG_VERSION);
   });
 });
 
