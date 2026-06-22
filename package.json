@@ -305,17 +305,17 @@
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "audify": "^1.10.1",
-    "kokoro-js": "^1.2.0",
-    "zod": "^4.4.3"
+    "kokoro-js": "^1.2.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "zod": "^4.4.3"
   },
   "overrides": {
     "tar": "^7.5.16"

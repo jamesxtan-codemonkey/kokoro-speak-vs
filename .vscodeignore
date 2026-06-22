@@ -52,8 +52,15 @@ node_modules/**/examples/**
 node_modules/**/docs/**
 node_modules/.bin/**
 
-# audify build/install-time tooling — not needed at runtime (it loads the
-# prebuilt build/Release/audify.node via `bindings`).
+# audify ships its C/C++ sources (opus + rtaudio) for building from source; at
+# runtime only the prebuilt build/Release/audify.node is loaded via `bindings`.
+node_modules/audify/vendor/**
+node_modules/audify/src/**
+node_modules/audify/CMakeLists.txt
+node_modules/audify/binding.gyp
+node_modules/audify/.gitmodules
+node_modules/audify/tsconfig.json
+# audify build/install-time tooling — not needed at runtime.
 node_modules/**/cmake-js/**
 node_modules/**/prebuild-install/**
 node_modules/**/node-abi/**
