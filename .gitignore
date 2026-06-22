@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# Bundled model weights — fetched by scripts/fetch-model.mjs at package time and
+# shipped in the VSIX (vsce uses .vscodeignore, not .gitignore). Too large for git.
+model/
 media/main.js
 media/main.js.map
 media/ort/
@@ -7,6 +10,7 @@ test/browsertest.js
 test/main-stub.js
 test/.normalize.cjs
 test/.textprep.cjs
+test/.codeprep.cjs
 test/.player.cjs
 test/.pcmplayer.cjs
 test/.mcp.cjs

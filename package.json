@@ -2,7 +2,7 @@
   "name": "kokoro-speak-vs",
   "displayName": "Kokoro Speak",
   "description": "Read text aloud in any editor using the open-weight Kokoro 82M TTS model.",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "publisher": "JamesTan",
   "engines": {
     "vscode": "^1.90.0"
@@ -49,6 +49,11 @@
       {
         "command": "kokoroSpeak.selectVoice",
         "title": "Kokoro Speak: Select Voice",
+        "category": "Kokoro Speak"
+      },
+      {
+        "command": "kokoroSpeak.setModelPath",
+        "title": "Kokoro Speak: Set Model Path (offline / manual install)",
         "category": "Kokoro Speak"
       },
       {
@@ -112,6 +117,11 @@
           "maximum": 2,
           "description": "Speaking rate multiplier (0.5–2.0)."
         },
+        "kokoroSpeak.modelPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the model location with a folder containing a manually-installed Kokoro model. **Leave empty to use the model bundled with the extension** (works fully offline, no download). Set this only to point at a different copy.\n\nThe folder must contain `config.json`, `tokenizer.json`, `tokenizer_config.json`, and `onnx/model_quantized.onnx`, downloaded from https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX. Use the **Kokoro Speak: Set Model Path** command to pick and verify a folder."
+        },
         "kokoroSpeak.bufferSeconds": {
           "type": "number",
           "default": 0,
@@ -132,6 +142,48 @@
             "An LLM applies your natural-language rules; falls back to the local rules if no backend is available."
           ],
           "description": "How to rewrite text into a speech-friendly form before synthesis. 'ai' sends the spoken text to a model and asks once before first use."
+        },
+        "kokoroSpeak.normalization.codeReading": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "all",
+            "comments"
+          ],
+          "enumDescriptions": [
+            "Read the whole file, with comment markers (//, #, /* */) removed so they aren't spoken.",
+            "Read ONLY comments and docstrings — code and string literals are skipped. Good for hearing a file's explanations."
+          ],
+          "markdownDescription": "For **source code** files only (not Markdown/plaintext): how much to read aloud. Identifiers (`camelCase`/`snake_case`) are split into words and common operators (`==`, `&&`, …) are spoken regardless of this setting."
+        },
+        "kokoroSpeak.normalization.byLanguage": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Per-language normalization overrides, keyed by VS Code language id (e.g. `c`, `cpp`, `python`, `typescript`). Each value may set `profile` (`\"prose\"`/`\"code\"`), `rules` (replace the AI rules), `replacements`, and `spellOut` — the latter two are *added* to the global ones. Example: `{ \"c\": { \"spellOut\": [\"GPIO\",\"UART\"] } }`.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string",
+                "enum": [
+                  "prose",
+                  "code"
+                ]
+              },
+              "rules": {
+                "type": "string"
+              },
+              "replacements": {
+                "type": "array"
+              },
+              "spellOut": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         },
         "kokoroSpeak.normalization.rules": {
           "type": "string",
@@ -239,30 +291,34 @@
   },
   "scripts": {
     "spike": "node scripts/spike.mjs",
+    "fetch-model": "node scripts/fetch-model.mjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --outfile=dist/extension.js",
     "build:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=cjs --external:audify --banner:js='#!/usr/bin/env node' --outfile=dist/mcp.js && chmod +x dist/mcp.js",
     "typecheck": "tsc --noEmit",
-    "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js",
+    "vscode:prepublish": "npm run fetch-model && esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js && npm run build:mcp",
     "package": "vsce package",
     "clean": "rm -rf dist *.vsix",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --format=cjs --outfile=test/.synth.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/codeprep.ts --bundle --platform=node --format=cjs --outfile=test/.codeprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --format=cjs --outfile=test/.synth.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
+    "@huggingface/transformers": "3.8.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "audify": "^1.10.1",
     "kokoro-js": "^1.2.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@huggingface/transformers": "3.8.1",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "typescript": "^5.5.0"
+  },
+  "overrides": {
+    "tar": "^7.5.16"
   },
   "allowScripts": {
     "onnxruntime-node@1.21.0": true,

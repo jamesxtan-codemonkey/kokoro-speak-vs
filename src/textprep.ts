@@ -1,7 +1,9 @@
-// Light, deterministic text preparation. For now this only de-markdowns text so
-// the preview/document case doesn't read syntax aloud ("hash", "asterisk").
-// The richer LLM normalizer ($10B → ten billion dollars) lands in a later
-// milestone; this is the structural cleanup that belongs before it.
+// Light, deterministic text preparation: de-markdown prose, and for source code
+// strip comment markers (or read only the comments) so syntax isn't spoken. The
+// richer per-file-type normalization ($10B → ten billion dollars; operators /
+// identifiers) runs after this, in normalize.ts.
+
+import { profileFor, stripCodeForSpeech, CodeReading } from "./codeprep";
 
 export function stripMarkdown(md: string): string {
   let s = md.replace(/\r\n/g, "\n");
@@ -57,7 +59,21 @@ export function stripMarkdown(md: string): string {
   return s.replace(/[ \t]{2,}/g, " ").trim();
 }
 
-/** Text to speak for a document (or a selection within it), cleaned by type. */
-export function getSpeakableText(languageId: string, raw: string): string {
+/**
+ * Text to speak for a document (or selection within it), cleaned by file type:
+ *  - Markdown  → strip Markdown syntax.
+ *  - Code      → strip comment markers (and, in "comments" mode, read only the
+ *                comments) so `//`, `#`, `/* *​/` aren't spoken. See codeprep.
+ *  - Plaintext → as-is.
+ * `codeReading` only affects code languages.
+ */
+export function getSpeakableText(
+  languageId: string,
+  raw: string,
+  codeReading: CodeReading = "all"
+): string {
+  if (profileFor(languageId) === "code") {
+    return stripCodeForSpeech(raw, languageId, codeReading);
+  }
   return languageId === "markdown" ? stripMarkdown(raw) : raw;
 }

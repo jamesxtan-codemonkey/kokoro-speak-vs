@@ -3,12 +3,18 @@
 // concatenated WAV segments. Kept free of `vscode` imports so it can be tested
 // in plain Node.
 
+import * as path from "path";
+
 // kokoro-js is ESM-only. The extension host bundle is CommonJS, and `require()`
 // of an ESM package throws ERR_REQUIRE_ESM on the Node that ships inside VS Code.
 // Load it via a real dynamic import() that esbuild won't rewrite to require()
-// (wrapping in `new Function` hides it from the bundler).
+// (wrapping in `new Function` hides it from the bundler). Same trick for
+// @huggingface/transformers, whose `env` singleton we mutate to load locally.
 const importKokoro: () => Promise<any> = new Function(
   "return import('kokoro-js')"
+) as any;
+const importTransformers: () => Promise<any> = new Function(
+  "return import('@huggingface/transformers')"
 ) as any;
 
 let kokoroMod: any;
@@ -21,12 +27,63 @@ const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const DTYPE = "q8";
 const MAX_BUFFER_SEC = 600;
 
+// The ONNX weights filename transformers.js resolves for each dtype. Kept in
+// sync with DTYPE so the offline file list below stays correct.
+const ONNX_FILE: Record<string, string> = {
+  fp32: "model.onnx",
+  fp16: "model_fp16.onnx",
+  q8: "model_quantized.onnx",
+  q4: "model_q4.onnx",
+  q4f16: "model_q4f16.onnx",
+  uint8: "model_uint8.onnx",
+};
+
+/** HuggingFace repo the model is fetched from when online. */
+export const MODEL_REPO_URL = `https://huggingface.co/${MODEL_ID}`;
+
+/** Files (relative to the chosen folder) required for a manual/offline install.
+ *  This is the source of truth for the verifier and the user instructions. */
+export const REQUIRED_MODEL_FILES = [
+  "config.json",
+  "tokenizer.json",
+  "tokenizer_config.json",
+  `onnx/${ONNX_FILE[DTYPE] ?? "model_quantized.onnx"}`,
+];
+
+// Absolute path to a local model folder, or undefined to download from HF.
+let localModelPath: string | undefined;
 let ttsPromise: Promise<any> | undefined;
+
+/**
+ * Point synthesis at a local model folder (offline / air-gapped), or pass
+ * undefined to use the online HuggingFace download. Changing the source discards
+ * any loaded model so the next loadModel() reloads from the new location.
+ */
+export function setModelSource(dir: string | undefined): void {
+  const next = dir || undefined;
+  if (next !== localModelPath) {
+    localModelPath = next;
+    ttsPromise = undefined;
+  }
+}
 
 export function loadModel(onProgress?: (pct: number) => void): Promise<any> {
   if (!ttsPromise) {
-    ttsPromise = kokoro().then((m) =>
-      m.KokoroTTS.from_pretrained(MODEL_ID, {
+    ttsPromise = (async () => {
+      const [m, t] = await Promise.all([kokoro(), importTransformers()]);
+      // transformers.js resolves files as `<localModelPath>/<id>/<file>`. Point
+      // localModelPath at the parent and use the folder's own name as the id, so
+      // the user can name the folder anything and just drop the files inside.
+      let id = MODEL_ID;
+      if (localModelPath) {
+        t.env.allowLocalModels = true;
+        t.env.allowRemoteModels = false; // never reach the network offline
+        t.env.localModelPath = path.dirname(localModelPath);
+        id = path.basename(localModelPath);
+      } else {
+        t.env.allowRemoteModels = true;
+      }
+      return m.KokoroTTS.from_pretrained(id, {
         dtype: DTYPE,
         device: "cpu",
         progress_callback: (p: any) => {
@@ -34,8 +91,13 @@ export function loadModel(onProgress?: (pct: number) => void): Promise<any> {
             onProgress?.(Math.round(p.progress));
           }
         },
-      })
-    );
+      });
+    })();
+    // If the load rejects, clear the cached promise so a later retry (e.g. after
+    // the user points us at a local folder) actually re-runs.
+    ttsPromise.catch(() => {
+      ttsPromise = undefined;
+    });
   }
   return ttsPromise;
 }

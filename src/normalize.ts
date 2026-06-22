@@ -13,6 +13,10 @@ import { join } from "path";
 
 export type NormMode = "off" | "deterministic" | "ai";
 export type Backend = "auto" | "cli" | "api";
+// Normalization profile, chosen from the file type. "prose" = the original
+// behavior (currency/percent/dates…). "code" = expand operators, skip prose-only
+// rules that misfire on source ($, %). Identifier splitting applies to both.
+export type Profile = "prose" | "code";
 
 export interface Replacement {
   from?: string; // literal match
@@ -32,6 +36,8 @@ export interface NormalizeOptions {
   model: string; // for backend "api"
   apiKey?: string; // for backend "api" (from SecretStorage)
   timeoutMs: number;
+  profile?: Profile; // deterministic engine variant (default "prose")
+  languageId?: string; // source file type, for the AI-mode context hint
 }
 
 // ---- deterministic engine --------------------------------------------------
@@ -133,8 +139,80 @@ export function stripEmphasis(s: string): string {
     .replace(/(?<!\w)_(.+?)_(?!\w)/g, "$1");
 }
 
-export function deterministic(text: string): string {
+// Mixed-case names that are real words, not identifiers to split apart. Compared
+// lowercased. (All-caps acronyms like JSON/HTML have no case boundary and are
+// never split anyway, so they don't need listing here.)
+const KEEP_WHOLE = new Set([
+  "javascript", "typescript", "github", "gitlab", "bitbucket", "paypal",
+  "youtube", "iphone", "ipad", "ipod", "imac", "macos", "ios", "ipados",
+  "oauth", "openai", "openssl", "graphql", "postgresql", "mongodb", "dynamodb",
+  "nodejs", "leetcode", "stackoverflow", "devops", "wifi", "latex",
+]);
+
+/** Split one identifier into spoken words at camelCase / snake_case boundaries. */
+function splitCamel(w: string): string {
+  if (!w || KEEP_WHOLE.has(w.toLowerCase())) return w;
+  return w
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // fooBar → foo Bar
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2"); // XMLHttp → XML Http
+}
+
+/**
+ * Read code identifiers as words: split camelCase / PascalCase / snake_case /
+ * SCREAMING_SNAKE into space-separated words (getUserName → "get User Name";
+ * MAX_BUFFER → "MAX BUFFER"). Applies to ALL text (prose too) — names like
+ * `useEffect` read correctly wherever they appear. Only tokens with an internal
+ * case/underscore boundary are touched, and a small allowlist (JavaScript,
+ * GitHub…) is preserved whole.
+ */
+export function splitIdentifiers(text: string): string {
+  return text.replace(/[A-Za-z_][A-Za-z0-9_]*/g, (m) => {
+    // Fast path: leave plain words / all-caps acronyms / numbers untouched —
+    // only tokens with an internal underscore or case boundary are split.
+    if (!/_|[a-z0-9][A-Z]|[A-Z]{2,}[a-z]/.test(m)) return m;
+    if (KEEP_WHOLE.has(m.toLowerCase())) return m;
+    return m
+      .replace(/_+/g, " ") // snake_case → spaces
+      .trim()
+      .split(/\s+/)
+      .map(splitCamel)
+      .join(" ");
+  });
+}
+
+// Multi-char operators → words, for the "code" profile. Longest/most specific
+// first (=== before ==, !== before !=) so a prefix doesn't match early.
+const OPERATORS: Array<[RegExp, string]> = [
+  [/===/g, " strictly equals "],
+  [/!==/g, " strictly not equal "],
+  [/==/g, " equals "],
+  [/!=/g, " not equal "],
+  [/<=/g, " less than or equal "],
+  [/>=/g, " greater than or equal "],
+  [/&&/g, " and "],
+  [/\|\|/g, " or "],
+  [/\+\+/g, " plus plus "],
+  [/--/g, " minus minus "],
+  [/\+=/g, " plus equals "],
+  [/-=/g, " minus equals "],
+  [/\*=/g, " times equals "],
+  [/\/=/g, " over equals "],
+  [/=>/g, " arrow "],
+  [/::/g, " scope "],
+  [/(?<=[A-Za-z0-9_)\]])->(?=[A-Za-z_])/g, " arrow "], // member access x->y
+];
+
+/** Expand common multi-char source operators to words (code profile only). */
+export function expandOperators(text: string): string {
+  let s = text;
+  for (const [re, repl] of OPERATORS) s = s.replace(re, repl);
+  return s;
+}
+
+export function deterministic(text: string, profile: Profile = "prose"): string {
   let s = stripEmphasis(text);
+  s = splitIdentifiers(s); // both profiles
+  if (profile === "code") s = expandOperators(s);
 
   // Arrows → "to". Unicode arrows in any context; the ASCII single "->" only
   // when whitespace-flanked, so code like "x->y", "a->b" is left intact. A
@@ -144,61 +222,66 @@ export function deterministic(text: string): string {
   s = s.replace(/\s*(?:→|⟶|⇒|↦)\s*/g, " to ");
   s = s.replace(/(?<=^|\s)->(?=\s|$)/g, "to");
 
-  // Tilde before a number/currency → "about" (~100 → about 100).
-  s = s.replace(/~\s?(?=[\d$])/g, "about ");
+  // Prose-only number/symbol rules. Skipped for the "code" profile, where `$`,
+  // `%`, and `k/m/b` scale suffixes mean variables, modulo, and hex/identifiers —
+  // not currency, percent, or magnitudes.
+  if (profile === "prose") {
+    // Tilde before a number/currency → "about" (~100 → about 100).
+    s = s.replace(/~\s?(?=[\d$])/g, "about ");
 
-  // Numeric dates (ISO YYYY-MM-DD) → read each group separately, NOT as a range.
-  // We can't reliably tell the month from the day across locale formats, so we
-  // don't interpret — just swap the hyphens for pauses so "2026-06-16" is spoken
-  // as "2026, 06, 16" rather than the wrong "2026 to 06 to 16". Runs before the
-  // range rules so a 4-2-2 date is never mistaken for a numeric range.
-  s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$1, $2, $3");
+    // Numeric dates (ISO YYYY-MM-DD) → read each group separately, NOT as a
+    // range. We can't reliably tell the month from the day across locale formats,
+    // so we don't interpret — just swap the hyphens for pauses so "2026-06-16" is
+    // spoken as "2026, 06, 16" rather than the wrong "2026 to 06 to 16". Runs
+    // before the range rules so a 4-2-2 date is never mistaken for a range.
+    s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$1, $2, $3");
 
-  // Ranges (en/em dash between number-ish tokens) → " to ".
-  s = s.replace(
-    /(\d[\d,]*(?:\.\d+)?\s?[kKmMbBtT]?)\s?[–—]\s?(?=\d)/g,
-    "$1 to "
-  );
-  // ASCII hyphen ranges only in the unambiguous percent context ("5-20%" →
-  // "5 to 20 percent"); bare "a-b" hyphens are left alone (dates, phone numbers,
-  // negatives) and handled by ai mode instead.
-  s = s.replace(
-    /(\d[\d,]*(?:\.\d+)?)\s?-\s?(\d[\d,]*(?:\.\d+)?)(?=\s?%)/g,
-    "$1 to $2"
-  );
+    // Ranges (en/em dash between number-ish tokens) → " to ".
+    s = s.replace(/(\d[\d,]*(?:\.\d+)?\s?[kKmMbBtT]?)\s?[–—]\s?(?=\d)/g, "$1 to ");
+    // ASCII hyphen ranges only in the unambiguous percent context ("5-20%" →
+    // "5 to 20 percent"); bare "a-b" hyphens are left alone (dates, phone
+    // numbers, negatives) and handled by ai mode instead.
+    s = s.replace(
+      /(\d[\d,]*(?:\.\d+)?)\s?-\s?(\d[\d,]*(?:\.\d+)?)(?=\s?%)/g,
+      "$1 to $2"
+    );
 
-  // Currency with scale: $10B → 10 billion dollars
-  s = s.replace(
-    /\$\s?(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
-    (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]} dollars`
-  );
-  // Plain currency: $10 → 10 dollars
-  s = s.replace(/\$\s?(\d[\d,]*(?:\.\d+)?)/g, "$1 dollars");
+    // Currency with scale: $10B → 10 billion dollars
+    s = s.replace(
+      /\$\s?(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
+      (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]} dollars`
+    );
+    // Plain currency: $10 → 10 dollars
+    s = s.replace(/\$\s?(\d[\d,]*(?:\.\d+)?)/g, "$1 dollars");
 
-  // Percentages: 50% → 50 percent (a leading ~ was handled above).
-  s = s.replace(/(\d[\d,]*(?:\.\d+)?)\s?%/g, "$1 percent");
+    // Percentages: 50% → 50 percent (a leading ~ was handled above).
+    s = s.replace(/(\d[\d,]*(?:\.\d+)?)\s?%/g, "$1 percent");
 
-  // Standalone scale after a number: 345k → 345 thousand
-  s = s.replace(
-    /\b(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
-    (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]}`
-  );
+    // Standalone scale after a number: 345k → 345 thousand
+    s = s.replace(
+      /\b(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
+      (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]}`
+    );
 
-  // Versions: v1.2.3 → version 1 point 2 point 3
-  s = s.replace(/\bv(\d+(?:\.\d+)+)\b/gi, (_m, ver: string) => {
-    return "version " + ver.split(".").join(" point ");
-  });
+    // Versions: v1.2.3 → version 1 point 2 point 3
+    s = s.replace(/\bv(\d+(?:\.\d+)+)\b/gi, (_m, ver: string) => {
+      return "version " + ver.split(".").join(" point ");
+    });
 
-  // Quarters: Q4 2025 → fourth quarter 2025; Q4 → fourth quarter
-  s = s.replace(/\bQ([1-4])\b(\s+\d{4})?/g, (_m, q: string, year: string) => {
-    return `${ORDINAL[Number(q)]} quarter${year ?? ""}`;
-  });
+    // Quarters: Q4 2025 → fourth quarter 2025; Q4 → fourth quarter
+    s = s.replace(/\bQ([1-4])\b(\s+\d{4})?/g, (_m, q: string, year: string) => {
+      return `${ORDINAL[Number(q)]} quarter${year ?? ""}`;
+    });
+
+    // "&" → "and" (in code it's bitwise-and / address-of — leave it).
+    s = s.replace(/\s?&\s?/g, " and ");
+  }
 
   // Abbreviations.
   for (const [re, repl] of ABBREV) s = s.replace(re, repl);
 
-  // Symbols.
-  s = s.replace(/\s?&\s?/g, " and ").replace(/@/g, " at ");
+  // "@" → "at" (emails, handles, decorators) in both profiles.
+  s = s.replace(/@/g, " at ");
 
   // Emoji → short words (known) then drop the rest, so nothing is read as raw
   // Unicode. Known glyphs first (covers dingbats not flagged as emoji), then
@@ -241,7 +324,7 @@ const CACHE = new Map<string, string>();
 const CACHE_CAP = 500;
 
 function cacheKey(o: NormalizeOptions, text: string): string {
-  return [o.mode, o.backend, o.command, o.model, o.rules, text].join("\u0000");
+  return [o.mode, o.backend, o.command, o.model, o.profile ?? "prose", o.languageId ?? "", o.rules, text].join("\u0000");
 }
 function cacheGet(k: string): string | undefined {
   return CACHE.get(k);
@@ -513,7 +596,7 @@ export async function normalize(
     opts.spellOut
   );
 
-  if (opts.mode === "deterministic") return deterministic(pre);
+  if (opts.mode === "deterministic") return deterministic(pre, opts.profile);
 
   // mode === "ai"
   const key = cacheKey(opts, pre);
@@ -521,14 +604,23 @@ export async function normalize(
   if (hit !== undefined) return hit;
 
   if (!hasCandidates(pre)) {
-    const det = deterministic(pre);
+    const det = deterministic(pre, opts.profile);
     cacheSet(key, det);
     return det;
   }
 
+  // Tell the LLM what kind of file this is, so it normalizes in context (read a
+  // `.c` file's code/identifiers/operators the way a programmer would say them).
+  const hint =
+    opts.profile === "code"
+      ? `The text below is source code${
+          opts.languageId ? ` (${opts.languageId})` : ""
+        }. Read comments and strings as prose; read code, identifiers, and operators the way a developer would say them aloud.\n\n`
+      : "";
+
   const result = await callBackend(
     buildSystem(opts.rules),
-    `Text to rewrite:\n${pre}`,
+    `${hint}Text to rewrite:\n${pre}`,
     opts,
     // Char count as a token proxy: generous for English, safe for multibyte
     // text where chars≈tokens, so output isn't capped mid-sentence.
@@ -538,7 +630,7 @@ export async function normalize(
   // Strip emphasis from the model's output too — a guaranteed floor so markers
   // are never spoken even if the model echoes them. Fall back to deterministic
   // on any failure.
-  const final = result ? stripEmphasis(result) : deterministic(pre);
+  const final = result ? stripEmphasis(result) : deterministic(pre, opts.profile);
   cacheSet(key, final);
   return final;
 }

@@ -3,9 +3,8 @@
 # are included from node_modules by vsce (NOT excluded here).
 .vscode/**
 src/**
-# The standalone MCP server is not part of the VS Code extension (it's built and
-# run separately — see docs/mcp-voice.md).
-dist/mcp.js
+# dist/mcp.js (the standalone MCP server) IS shipped now, so agents can register
+# it from the installed extension dir with no source checkout — see docs/mcp-voice.md.
 webview/**
 scripts/**
 test/**
@@ -55,7 +54,7 @@ node_modules/.bin/**
 
 # audify build/install-time tooling — not needed at runtime (it loads the
 # prebuilt build/Release/audify.node via `bindings`).
-node_modules/cmake-js/**
-node_modules/prebuild-install/**
-node_modules/audify/node_modules/node-abi/**
-node_modules/audify/node_modules/node-addon-api/**
+node_modules/**/cmake-js/**
+node_modules/**/prebuild-install/**
+node_modules/**/node-abi/**
+node_modules/**/node-addon-api/**

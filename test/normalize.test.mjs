@@ -68,10 +68,32 @@ test("emphasis markers are silent (never read 'asterisk'), even off the Markdown
     assert.equal(N.deterministic(input), expected, `for "${input}"`);
     assert.ok(!/\*/.test(N.deterministic(input)), `no asterisk left: "${input}"`);
   }
-  // intra-word underscores (identifiers) survive
-  assert.equal(N.deterministic("read file_name and snake_case"), "read file_name and snake_case");
+  // intra-word underscores aren't emphasis, but identifiers ARE split for speech
+  assert.equal(N.deterministic("read file_name and snake_case"), "read file name and snake case");
   // lone / spaced operators are not treated as emphasis
   assert.equal(N.deterministic("compute a * b carefully"), "compute a * b carefully");
+});
+
+test("splitIdentifiers: camelCase / snake_case / SCREAMING split; brands kept", () => {
+  assert.equal(N.splitIdentifiers("getUserName"), "get User Name");
+  assert.equal(N.splitIdentifiers("XMLHttpRequest"), "XML Http Request");
+  assert.equal(N.splitIdentifiers("MAX_BUFFER_SEC"), "MAX BUFFER SEC");
+  assert.equal(N.splitIdentifiers("read file_name now"), "read file name now");
+  // plain words, acronyms, and allowlisted brands are untouched
+  assert.equal(N.splitIdentifiers("the JSON API in JavaScript on GitHub"), "the JSON API in JavaScript on GitHub");
+  // apostrophes and numbers survive
+  assert.equal(N.splitIdentifiers("don't use utf8 here"), "don't use utf8 here");
+});
+
+test("deterministic code profile: operators expand, prose rules skipped", () => {
+  // operators → words
+  assert.equal(N.deterministic("if (a == b && c != d)", "code"), "if (a equals b and c not equal d)");
+  // identifiers split in code too
+  assert.equal(N.deterministic("int maxCount = 0;", "code"), "int max Count = 0;");
+  // prose-only rules do NOT fire on code: $ stays a variable, % stays modulo
+  assert.equal(N.deterministic("x = $total % 100", "code"), "x = $total % 100");
+  // ...but the SAME text in prose profile expands them
+  assert.equal(N.deterministic("split 50% off", "prose"), "split 50 percent off");
 });
 
 test("spellOut: acronyms read letter-by-letter (whole words only)", () => {

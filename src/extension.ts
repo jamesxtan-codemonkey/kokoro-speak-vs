@@ -1,7 +1,15 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { getSpeakableText } from "./textprep";
+import { profileFor, CodeReading } from "./codeprep";
 import { AudioPlayer, AudioCallbacks, createPlayer } from "./pcmplayer";
-import { loadModel, synthesize } from "./synth";
+import {
+  loadModel,
+  synthesize,
+  setModelSource,
+  REQUIRED_MODEL_FILES,
+  MODEL_REPO_URL,
+} from "./synth";
 import { VOICES, isVoice } from "./voices";
 import {
   normalize,
@@ -62,23 +70,24 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kokoroSpeak.speakSelection", () => {
       const src = resolveSource();
       if (!src) return noSource();
-      speak(getSpeakableText(src.document.languageId, src.text), src.kind);
+      speak(src.text, src.kind, src.document.languageId);
     }),
     vscode.commands.registerCommand("kokoroSpeak.speakDocument", () => {
       const src = resolveSource({ wholeOnly: true });
       if (!src) return noSource();
-      speak(getSpeakableText(src.document.languageId, src.text), "document");
+      speak(src.text, "document", src.document.languageId);
     }),
     vscode.commands.registerCommand("kokoroSpeak.speakClipboard", async () => {
       // Works from anywhere — including webview panels (Claude Code, Markdown
       // preview) whose text the extension can't read directly. Copy, then run
-      // this. Clipboard text is usually Markdown, so strip it for speech.
+      // this. Clipboard text is usually Markdown (origin file type unknown), so
+      // it's normalized as prose.
       const clip = await vscode.env.clipboard.readText();
       if (!clip.trim()) {
         vscode.window.showInformationMessage("Kokoro Speak: clipboard is empty.");
         return;
       }
-      speak(getSpeakableText("markdown", clip), "clipboard");
+      speak(clip, "clipboard", "markdown");
     }),
     vscode.commands.registerCommand("kokoroSpeak.pause", () => {
       if (!player?.isActive) return;
@@ -98,11 +107,19 @@ export function activate(context: vscode.ExtensionContext) {
       else vscode.commands.executeCommand("kokoroSpeak.speakClipboard");
     }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
+    vscode.commands.registerCommand("kokoroSpeak.setModelPath", () =>
+      promptForModelDir()
+    ),
     vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
     vscode.commands.registerCommand("kokoroSpeak.configure", configure),
     vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
-      speak(HELLO_TEXT, "greeting")
-    )
+      speak(HELLO_TEXT, "greeting", "plaintext")
+    ),
+    // Picking up a model-path change from Settings: drop the loaded model so the
+    // next play re-resolves the source (custom path → bundled → download).
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("kokoroSpeak.modelPath")) modelReady = false;
+    })
   );
 }
 
@@ -156,7 +173,7 @@ function noSource() {
   );
 }
 
-function speak(text: string | undefined, what: string) {
+function speak(text: string | undefined, what: string, languageId = "markdown") {
   const trimmed = text?.trim();
   if (!trimmed) {
     vscode.window.showInformationMessage("Kokoro Speak: nothing to speak.");
@@ -196,19 +213,15 @@ function speak(text: string | undefined, what: string) {
 
   void (async () => {
     try {
-      const speakText = await prepareText(trimmed, what, cancelled);
+      const speakText = await prepareText(trimmed, what, cancelled, languageId);
       if (cancelled()) return;
       if (!speakText.trim()) {
         setStatus("idle");
         return;
       }
       if (!modelReady) {
-        setStatus("loading", "Loading model…");
-        await loadModel((pct) =>
-          setStatus("loading", `Downloading model: ${pct}%`)
-        );
-        modelReady = true;
-        if (cancelled()) return;
+        const loaded = await ensureModelLoaded(cancelled);
+        if (!loaded || cancelled()) return;
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
       await synthesize(
@@ -236,6 +249,156 @@ function speak(text: string | undefined, what: string) {
       );
     }
   })();
+}
+
+/** Current configured local model folder (empty = use bundled / download). */
+function configuredModelPath(): string {
+  return (
+    vscode.workspace.getConfiguration("kokoroSpeak").get<string>("modelPath") ??
+    ""
+  ).trim();
+}
+
+/** The model bundled inside the extension (works fully offline, zero config). */
+function bundledModelDir(): string {
+  return path.join(extContext.extensionUri.fsPath, "model");
+}
+
+/**
+ * Pick where to load the model from, in priority order:
+ *   1. an explicit `kokoroSpeak.modelPath` (user override / custom install),
+ *   2. the bundled model shipped in the extension (offline, default),
+ *   3. undefined → download from HuggingFace (only if the bundle is absent).
+ */
+async function resolveModelDir(): Promise<string | undefined> {
+  const configured = configuredModelPath();
+  if (configured) return configured;
+  const bundled = bundledModelDir();
+  return (await verifyModelDir(bundled)).length ? undefined : bundled;
+}
+
+/**
+ * Load the model, recovering from a failure (e.g. a blocked download when no
+ * bundle is present) by walking the user through a manual install and retrying.
+ * Returns true once the model is ready; false if the user gave up (status left
+ * on "error").
+ */
+async function ensureModelLoaded(cancelled: () => boolean): Promise<boolean> {
+  let dir = await resolveModelDir();
+  setModelSource(dir);
+  for (;;) {
+    try {
+      setStatus("loading", "Loading model…");
+      await loadModel((pct) => {
+        if (cancelled()) return;
+        // Only an online fetch shows a download percentage; local loads are fast.
+        setStatus("loading", dir ? "Loading model…" : `Downloading model: ${pct}%`);
+      });
+      modelReady = true;
+      return true;
+    } catch (err: any) {
+      if (cancelled()) return false;
+      setStatus("error");
+      const picked = await promptForModelDir(err);
+      if (cancelled() || !picked) return false; // declined — leave error shown
+      dir = picked; // verified + saved; loop retries against the local files
+    }
+  }
+}
+
+/** Render a list as indented bullets for a message body. */
+const bullets = (items: string[]): string =>
+  items.map((f) => "  • " + f).join("\n");
+
+/** Files a manual install must contain, as a bullet list for messages. */
+const REQUIRED_FILES_LIST = bullets(REQUIRED_MODEL_FILES);
+
+function manualInstallInstructions(reason?: string): string {
+  return (
+    (reason ? reason + "\n\n" : "") +
+    "To install the Kokoro model manually (no internet needed on this machine):\n\n" +
+    `1. On a machine with internet, open:\n   ${MODEL_REPO_URL}\n\n` +
+    "2. Download these files, keeping the onnx/ subfolder layout:\n" +
+    REQUIRED_FILES_LIST +
+    "\n\n3. Put them together in one folder (any name).\n" +
+    "4. Copy that folder to this machine, then select it next."
+  );
+}
+
+/** Check a folder has every required model file; returns the missing ones. */
+async function verifyModelDir(dir: string): Promise<string[]> {
+  const missing: string[] = [];
+  for (const rel of REQUIRED_MODEL_FILES) {
+    const uri = vscode.Uri.file(path.join(dir, ...rel.split("/")));
+    try {
+      await vscode.workspace.fs.stat(uri);
+    } catch {
+      missing.push(rel);
+    }
+  }
+  return missing;
+}
+
+/**
+ * Show manual-install instructions, let the user pick a folder, verify it, and
+ * on success persist it (settings + live model source). Returns the verified
+ * folder, or undefined if the user cancelled or chose to edit settings by hand.
+ */
+async function promptForModelDir(err?: unknown): Promise<string | undefined> {
+  const reason = err
+    ? `Kokoro Speak couldn't load the model: ${
+        (err as any)?.message ?? String(err)
+      }`
+    : undefined;
+  for (;;) {
+    const choice = await vscode.window.showInformationMessage(
+      manualInstallInstructions(reason),
+      { modal: true },
+      "Select Model Folder…",
+      "Open Settings"
+    );
+    if (choice === "Open Settings") {
+      void vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "kokoroSpeak.modelPath"
+      );
+      return undefined;
+    }
+    if (choice !== "Select Model Folder…") return undefined; // dismissed
+
+    const sel = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: "Use this model folder",
+      title: "Select the folder containing the Kokoro model files",
+    });
+    if (!sel?.length) continue; // back to the instructions
+
+    const dir = sel[0].fsPath;
+    const missing = await verifyModelDir(dir);
+    if (missing.length) {
+      const retry = await vscode.window.showErrorMessage(
+        `That folder is missing required files:\n${bullets(
+          missing
+        )}\n\nSelect the folder that directly contains config.json and the onnx/ subfolder.`,
+        { modal: true },
+        "Try Again"
+      );
+      if (retry !== "Try Again") return undefined;
+      continue;
+    }
+
+    await vscode.workspace
+      .getConfiguration("kokoroSpeak")
+      .update("modelPath", dir, vscode.ConfigurationTarget.Global);
+    setModelSource(dir);
+    modelReady = false; // force a reload from the new local files
+    vscode.window.showInformationMessage(
+      "Kokoro Speak: model folder verified and saved."
+    );
+    return dir;
+  }
 }
 
 async function backendOptions(): Promise<BackendOptions> {
@@ -468,13 +631,22 @@ function preview(v: unknown): string {
   return s.length > 60 ? s.slice(0, 57) + "…" : s;
 }
 
-/** Normalize text for speech per settings (Markdown was already stripped). */
+/**
+ * Prepare `raw` for speech per file type + settings: structural cleanup
+ * (Markdown strip / code comment handling) keyed on `languageId`, then
+ * normalization with the matching profile and any per-language overrides.
+ */
 async function prepareText(
-  text: string,
+  raw: string,
   what: string,
-  cancelled: () => boolean
+  cancelled: () => boolean,
+  languageId: string
 ): Promise<string> {
   const ncfg = vscode.workspace.getConfiguration("kokoroSpeak.normalization");
+  const codeReading = ncfg.get<CodeReading>("codeReading", "all");
+  const text = getSpeakableText(languageId, raw, codeReading);
+  if (!text.trim()) return text;
+
   let mode = ncfg.get<NormMode>("mode", "deterministic");
   if (mode === "off") return text;
 
@@ -485,17 +657,43 @@ async function prepareText(
     // status already shows "Preparing …" from speak()
   }
 
+  // Per-language overrides (kokoroSpeak.normalization.byLanguage[languageId])
+  // merged over the defaults: extra replacements/spellOut, optional rules /
+  // profile override.
+  const byLang =
+    ncfg.get<Record<string, LangOverride>>("byLanguage", {})?.[languageId] ?? {};
+  const baseReplacements = ncfg.get<any[]>("replacements", []);
+  const baseSpellOut = ncfg.get<string[]>("spellOut", []);
+
   return normalize(text, {
     mode,
-    rules: ncfg.get<string>("rules", SEED_RULES),
-    replacements: ncfg.get("replacements", []),
-    spellOut: ncfg.get<string[]>("spellOut", []),
+    profile: byLang.profile ?? profileFor(languageId),
+    languageId,
+    rules:
+      typeof byLang.rules === "string"
+        ? byLang.rules
+        : ncfg.get<string>("rules", SEED_RULES),
+    replacements: [
+      ...baseReplacements,
+      ...(Array.isArray(byLang.replacements) ? byLang.replacements : []),
+    ],
+    spellOut: [
+      ...baseSpellOut,
+      ...(Array.isArray(byLang.spellOut) ? byLang.spellOut : []),
+    ],
     backend: ncfg.get("backend", "auto"),
     command: ncfg.get<string>("command", ""),
     model: ncfg.get<string>("model", "claude-haiku-4-5"),
     apiKey: await extContext.secrets.get(SECRET_KEY),
     timeoutMs: ncfg.get<number>("timeoutMs", 20000),
   });
+}
+
+interface LangOverride {
+  profile?: "prose" | "code";
+  rules?: string;
+  replacements?: any[];
+  spellOut?: string[];
 }
 
 async function selectVoice() {
@@ -585,6 +783,17 @@ function setStatus(phase: Phase, detail?: string) {
     tip.appendMarkdown(" · [$(debug-stop) Stop](command:kokoroSpeak.stop)");
   }
   tip.appendMarkdown(" · [$(gear) Config](command:kokoroSpeak.configure)");
+  // Manual/offline model install — primary recovery path when the download is
+  // blocked; surfaced prominently while in the error state.
+  if (phase === "error") {
+    tip.appendMarkdown(
+      " · [$(folder-opened) Set model path](command:kokoroSpeak.setModelPath)"
+    );
+  } else {
+    tip.appendMarkdown(
+      " · [$(folder) Model](command:kokoroSpeak.setModelPath)"
+    );
+  }
   tip.appendMarkdown(
     active
       ? "\n\n_Click to pause/resume._"

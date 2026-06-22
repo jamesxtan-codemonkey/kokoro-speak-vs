@@ -13,13 +13,30 @@ for (const k of ["log", "info", "warn", "debug", "trace"] as const) {
     process.stderr.write(args.map((a) => String(a)).join(" ") + "\n");
 }
 
+import * as path from "path";
+import * as fs from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Speaker } from "./speaker";
+import { setModelSource } from "./synth";
 import { VOICES, DEFAULT_VOICE, describeVoice } from "./voices";
 // Single source of truth for the version (inlined from package.json at build).
 import { version } from "../package.json";
+
+/**
+ * Where to load the Kokoro model from, so the server runs offline like the
+ * extension. Priority: KOKORO_MODEL_PATH env → the model bundled next to this
+ * script (dist/mcp.js → ../model) → undefined (download from HuggingFace).
+ */
+function resolveModelDir(): string | undefined {
+  const env = process.env.KOKORO_MODEL_PATH?.trim();
+  if (env) return env;
+  const bundled = path.join(__dirname, "..", "model");
+  return fs.existsSync(path.join(bundled, "config.json")) ? bundled : undefined;
+}
+
+setModelSource(resolveModelDir());
 
 const speaker = new Speaker();
 
