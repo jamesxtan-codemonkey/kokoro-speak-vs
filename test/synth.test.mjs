@@ -60,6 +60,10 @@ test("chunkText handles empty/whitespace input", () => {
   assert.deepEqual(chunkText("   \n  "), []);
 });
 
+// Which precisions are "on disk": the packaged VSIX bundles only q8.
+const ALL_LOCAL = () => true;
+const ONLY_Q8 = (dtype) => dtype === "q8";
+
 test("gpuDevice: DirectML on Windows, none elsewhere", () => {
   assert.equal(gpuDevice("win32"), "dml");
   assert.equal(gpuDevice("darwin"), undefined);
@@ -78,7 +82,7 @@ test("resolvePrecision auto: q8 on GPU, fp32 on Windows x64 CPU, q8 on other CPU
 });
 
 test("planBackends: Windows auto tries DirectML first, then CPU", () => {
-  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64");
+  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64", ALL_LOCAL);
   assert.deepEqual(plan, [
     { device: "dml", dtype: "q8" },
     { device: "cpu", dtype: "fp32" },
@@ -86,19 +90,35 @@ test("planBackends: Windows auto tries DirectML first, then CPU", () => {
 });
 
 test("planBackends: device cpu skips the GPU", () => {
-  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64");
+  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64", ALL_LOCAL);
   assert.deepEqual(plan, [{ device: "cpu", dtype: "fp32" }]);
 });
 
 test("planBackends: macOS auto stays on CPU q8 (unchanged behavior)", () => {
-  const plan = planBackends({ device: "auto", precision: "auto" }, "darwin", "arm64");
+  const plan = planBackends({ device: "auto", precision: "auto" }, "darwin", "arm64", ONLY_Q8);
   assert.deepEqual(plan, [{ device: "cpu", dtype: "q8" }]);
   assert.equal(plan[0].fallbackReason, undefined, "auto on a GPU-less platform is not a fallback");
 });
 
 test("planBackends: device gpu without a GPU backend explains the CPU fallback", () => {
-  const plan = planBackends({ device: "gpu", precision: "auto" }, "linux", "x64");
+  const plan = planBackends({ device: "gpu", precision: "auto" }, "linux", "x64", ONLY_Q8);
   assert.equal(plan.length, 1);
   assert.equal(plan[0].device, "cpu");
   assert.match(plan[0].fallbackReason, /no GPU backend on linux/);
+});
+
+test("planBackends: Windows CPU without fp32 on disk uses bundled q8 and offers fp32", () => {
+  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64", ONLY_Q8);
+  assert.deepEqual(plan, [{ device: "cpu", dtype: "q8", upgrade: "fp32" }]);
+});
+
+test("planBackends: the GPU entry needs no upgrade (q8 is its best precision)", () => {
+  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64", ONLY_Q8);
+  assert.deepEqual(plan[0], { device: "dml", dtype: "q8" });
+  assert.deepEqual(plan[1], { device: "cpu", dtype: "q8", upgrade: "fp32" });
+});
+
+test("planBackends: an explicit precision is used as-is (downloaded if needed)", () => {
+  const plan = planBackends({ device: "cpu", precision: "fp32" }, "win32", "x64", ONLY_Q8);
+  assert.deepEqual(plan, [{ device: "cpu", dtype: "fp32" }]);
 });

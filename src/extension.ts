@@ -7,6 +7,8 @@ import {
   configureModel,
   currentBackend,
   describeBackend,
+  configureModelStorage,
+  upgradeModel,
   DevicePref,
   PrecisionPref,
 } from "./synth";
@@ -22,6 +24,7 @@ import {
 
 const SECRET_KEY = "kokoroSpeak.normalization.apiKey";
 const CONSENT_KEY = "kokoroSpeak.aiConsent";
+const NO_UPGRADE_KEY = "kokoroSpeak.declinedModelUpgrade";
 const NORM_KEYS = [
   "mode",
   "rules",
@@ -50,8 +53,9 @@ type Phase =
 let status: vscode.StatusBarItem;
 let player: AudioPlayer | undefined;
 let currentPhase: Phase = "idle";
-// Fallback reasons already shown, so a broken GPU warns once, not every Speak.
-const warnedFallbacks = new Set<string>();
+// Notices already shown this session (GPU fallback reasons, upgrade offers), so
+// each appears once, not on every Speak.
+const shownNotices = new Set<string>();
 let extContext: vscode.ExtensionContext;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
@@ -67,6 +71,11 @@ export function activate(context: vscode.ExtensionContext) {
   setStatus("idle");
   context.subscriptions.push(status);
 
+  // The q8 model ships inside the extension; anything downloaded on demand (the
+  // faster fp32 CPU model) goes to global storage so it survives updates.
+  configureModelStorage({
+    cacheDir: vscode.Uri.joinPath(context.globalStorageUri, "models").fsPath,
+  });
   applyModelPrefs();
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -177,14 +186,57 @@ function applyModelPrefs() {
   if (currentBackend() !== before && currentPhase === "idle") setStatus("idle");
 }
 
-/** Tell the user (once per reason) when the GPU was wanted but we're on CPU. */
-function warnIfFellBack() {
+/**
+ * After a load: say (once) if the GPU was wanted but we're on CPU, and offer the
+ * faster model when the bundled one is a stopgap (Windows CPU: fp32 ≈ 4x vs q8 ≈
+ * 1.2x realtime, which can stutter) — it's a one-time 325 MB download.
+ */
+function afterLoadNotices() {
   const b = currentBackend();
-  if (!b?.fallbackReason || warnedFallbacks.has(b.fallbackReason)) return;
-  warnedFallbacks.add(b.fallbackReason);
-  vscode.window.showWarningMessage(
-    `Kokoro Speak: GPU unavailable, using ${describeBackend(b)} (${b.fallbackReason}).`
-  );
+  if (!b) return;
+  const offerUpgrade =
+    !!b.upgrade && !extContext.globalState.get<boolean>(NO_UPGRADE_KEY) &&
+    !shownNotices.has("upgrade:" + b.upgrade);
+  const fellBack = !!b.fallbackReason && !shownNotices.has(b.fallbackReason);
+  if (!fellBack && !offerUpgrade) return;
+  if (b.fallbackReason) shownNotices.add(b.fallbackReason);
+  if (b.upgrade) shownNotices.add("upgrade:" + b.upgrade);
+
+  const DOWNLOAD = "Download faster CPU model (325 MB)";
+  const NEVER = "Don't ask again";
+  const actions = offerUpgrade ? [DOWNLOAD, NEVER] : [];
+  const msg = fellBack
+    ? `Kokoro Speak: GPU unavailable, using ${describeBackend(b)} (${b.fallbackReason}).`
+    : `Kokoro Speak: running on the CPU with the compact ${b.dtype} model, which can stutter on this machine.`;
+  const show = fellBack ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+  void show(msg, ...actions).then((pick) => {
+    if (pick === DOWNLOAD) void downloadUpgrade();
+    else if (pick === NEVER) void extContext.globalState.update(NO_UPGRADE_KEY, true);
+  });
+}
+
+async function downloadUpgrade() {
+  try {
+    const b = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Kokoro Speak: downloading the faster model",
+      },
+      (progress) => {
+        let last = 0;
+        return upgradeModel((pct) => {
+          if (pct > last) progress.report({ increment: pct - last, message: `${pct}%` });
+          last = pct;
+        });
+      }
+    );
+    if (currentPhase === "idle") setStatus("idle");
+    vscode.window.showInformationMessage(`Kokoro Speak: now using ${describeBackend(b)}.`);
+  } catch (e: any) {
+    vscode.window.showErrorMessage(
+      `Kokoro Speak: model download failed (${e?.message ?? e}). Still using the bundled model.`
+    );
+  }
 }
 
 export function deactivate() {
@@ -252,7 +304,7 @@ function speak(text: string | undefined, what: string) {
           setStatus("loading", `Downloading model: ${pct}%`)
         );
         if (cancelled()) return;
-        warnIfFellBack();
+        afterLoadNotices();
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
       await synthesize(
@@ -272,7 +324,7 @@ function speak(text: string | undefined, what: string) {
         }
       );
       if (!cancelled()) sp.end();
-      warnIfFellBack(); // the GPU can also fail mid-run (CPU took over)
+      afterLoadNotices(); // the GPU can also fail mid-run (CPU took over)
     } catch (err: any) {
       if (cancelled()) return;
       setStatus("error");

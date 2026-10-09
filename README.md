@@ -64,11 +64,16 @@ Measured on an RTX 4090 / i7-10700, `onnxruntime-node` 1.30:
 | DirectML (GPU) | **~25–30x** | ~6x | ~6x |
 | CPU (x64) | ~1.2x | ~5x | ~4x |
 
-So `auto` precision picks **q8 on the GPU** and **fp32 on a Windows x64 CPU** (q8
-is barely faster than playback there, which causes gaps). DirectML only keeps its
-fast path for the first input shape it sees, and every sentence has a different
-length; the quantized model's ops stay fast regardless, the float models don't.
-macOS and Linux keep CPU + q8 as before.
+So `auto` precision picks **q8 on the GPU** and prefers **fp32 on a Windows x64
+CPU** (q8 is barely faster than playback there, which can stutter). DirectML only
+keeps its fast path for the first input shape it sees, and every sentence has a
+different length; the quantized model's ops stay fast regardless, the float
+models don't. macOS and Linux keep CPU + q8 as before.
+
+Only q8 ships in the VSIX (see [Packaging](#packaging-self-contained-vsix)), so a
+Windows machine that ends up on the CPU starts on the bundled q8 and offers a
+one-time **Download faster CPU model (325 MB)**. It's stored in VS Code's global
+storage (survives extension updates) and used automatically from then on.
 
 > DirectML needs `onnxruntime-node` ≥ 1.22 — 1.21 (the version
 > `@huggingface/transformers` 3.8 pins) fails on Kokoro's `ConvTranspose`.
@@ -186,19 +191,45 @@ npm run build   # bundle the extension host (dist/extension.js)
 # press F5 → "Run Kokoro Speak (Extension)", then select text → Cmd/Ctrl+Alt+S
 ```
 
-> First Speak downloads ~80–90MB (q8 ONNX Kokoro weights) from HuggingFace and
-> caches them; subsequent runs are offline.
+> F5 uses the model in `models/` if you've run `npm run fetch-model` (packaging
+> does it for you); otherwise the first Speak downloads the q8 weights (~90 MB)
+> from Hugging Face and caches them.
 
-## Packaging note
+## Packaging (self-contained VSIX)
 
-`npm run package` (or `npm run build:vsix` to clean + typecheck first) builds a
-**platform-specific VSIX for the machine you run it on**, e.g.
-`kokoro-speak-vs-win32-x64-<version>.vsix` (~80 MB on Windows). It bundles native
-code — `onnxruntime-node`, `audify`, `sharp` — and npm only installs the host's
-builds of those, so package on each platform you want to ship.
-[scripts/package.mjs](scripts/package.mjs) passes `--target` to vsce and drops
-every other platform's `onnxruntime-node` binaries (which that package ships
-for all platforms). Model weights are downloaded on first use, not bundled. For
-local use, F5 is still the quickest path.
+Each VSIX is **self-contained**: it installs and speaks **offline**, with the
+extension, the native runtime and the Kokoro model inside — nothing is
+downloaded on first use.
+
+```bash
+npm run package:win   # → kokoro-speak-vs-win32-x64-<version>.vsix     (~117 MB)
+npm run package:mac   # → kokoro-speak-vs-darwin-arm64-<version>.vsix  (~115 MB)
+npm run package       # this machine's platform
+npm run verify-vsix -- kokoro-speak-vs-win32-x64-<version>.vsix --install
+```
+
+Both targets can be built **from either OS** — [scripts/package.mjs](scripts/package.mjs)
+stages the target's own native binaries rather than whatever npm installed on
+the host:
+
+| Part | How it gets in the VSIX |
+|---|---|
+| Kokoro model (q8, 92 MB) | [scripts/fetch-model.mjs](scripts/fetch-model.mjs) → `models/`, pinned HF revision + SHA-256 |
+| Voices (28) | ship inside `kokoro-js` |
+| `onnxruntime-node` | ships every platform; all but the target's are dropped (Windows keeps `DirectML.dll`) |
+| `audify` (audio out) | the target's N-API 8 prebuilt from audify's GitHub release |
+| `sharp` | replaced by a stub — transformers.js imports it but only uses it for images |
+
+[scripts/verify-vsix.mjs](scripts/verify-vsix.mjs) checks any VSIX's structure
+(model hashes; every native binary is the target's OS/CPU, read from its
+headers). For the host's own target it also extracts the VSIX and synthesizes
+speech from it **with downloads disabled** (`KOKORO_SPEAK_OFFLINE=1`), under
+Node and under VS Code's Electron runtime; `--install` additionally installs it
+into a throwaway VS Code profile. Install a VSIX with **Extensions: Install from
+VSIX…** or `code --install-extension <file>.vsix`.
+
+Targets: `win32-x64` and `darwin-arm64` (Apple silicon); `linux-x64`/`linux-arm64`
+also package. **Intel Macs aren't supported** — `onnxruntime-node` 1.30 (needed
+for DirectML) no longer ships `darwin-x64` binaries.
 
 All npm scripts run under both cmd.exe (Windows) and sh (macOS/Linux).

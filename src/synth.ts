@@ -4,12 +4,21 @@
 // concatenated WAV segments. Kept free of `vscode` imports so it can be tested
 // in plain Node.
 
+import * as fs from "fs";
+import * as path from "path";
+
 // kokoro-js is ESM-only. The extension host bundle is CommonJS, and `require()`
 // of an ESM package throws ERR_REQUIRE_ESM on the Node that ships inside VS Code.
 // Load it via a real dynamic import() that esbuild won't rewrite to require()
 // (wrapping in `new Function` hides it from the bundler).
 const importKokoro: () => Promise<any> = new Function(
   "return import('kokoro-js')"
+) as any;
+
+// Same trick for transformers.js (kokoro-js's runtime), whose `env` decides where
+// model files come from. Both resolve to the same module instance.
+const importTransformers: () => Promise<any> = new Function(
+  "return import('@huggingface/transformers')"
 ) as any;
 
 let kokoroMod: any;
@@ -20,6 +29,55 @@ async function kokoro(): Promise<any> {
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const MAX_BUFFER_SEC = 600;
+
+// The packaged extension ships the q8 model in <extension>/models (see
+// scripts/fetch-model.mjs), so it works offline out of the box. This file is
+// bundled to dist/*.js (or test/*.cjs), so the models dir is one level up.
+const BUNDLED_MODELS_DIR = path.join(__dirname, "..", "models");
+
+/** ONNX file name suffix per precision (transformers.js convention). */
+const DTYPE_SUFFIX: Record<string, string> = { fp32: "", fp16: "_fp16", q8: "_quantized" };
+
+interface Storage {
+  /** Where on-demand downloads (e.g. fp32) are cached; default: transformers.js's. */
+  cacheDir?: string;
+  /** Never download — use only bundled/cached files. */
+  offline: boolean;
+}
+let storage: Storage = { offline: process.env.KOKORO_SPEAK_OFFLINE === "1" };
+let tfEnv: any;
+
+/** Set where downloaded model files are cached (the extension uses its global
+ *  storage, so downloads survive extension updates) and/or force offline. */
+export function configureModelStorage(next: Partial<Storage>): void {
+  storage = { ...storage, ...next };
+  if (tfEnv) applyStorage(tfEnv);
+}
+
+function applyStorage(env: any) {
+  env.allowLocalModels = true;
+  env.localModelPath = BUNDLED_MODELS_DIR;
+  if (storage.cacheDir) env.cacheDir = storage.cacheDir;
+  env.allowRemoteModels = !storage.offline;
+}
+
+async function modelEnv(): Promise<any> {
+  if (!tfEnv) {
+    tfEnv = (await importTransformers()).env;
+    applyStorage(tfEnv);
+  }
+  return tfEnv;
+}
+
+/** True if this precision's weights are on disk (bundled or downloaded), i.e.
+ *  loading it won't hit the network. */
+export function modelIsLocal(dtype: string): boolean {
+  const suffix = DTYPE_SUFFIX[dtype];
+  if (suffix === undefined) return false;
+  const rel = path.join(MODEL_ID, "onnx", `model${suffix}.onnx`);
+  const dirs = [BUNDLED_MODELS_DIR, storage.cacheDir ?? tfEnv?.cacheDir].filter(Boolean);
+  return dirs.some((d) => fs.existsSync(path.join(d as string, rel)));
+}
 
 /** "auto" = the platform GPU if there is one (DirectML on Windows), else CPU. */
 export type DevicePref = "auto" | "gpu" | "cpu";
@@ -38,6 +96,9 @@ export interface Backend {
   dtype: string;
   /** Why we're not on the preferred GPU, if we fell back. */
   fallbackReason?: string;
+  /** A faster precision for this device that isn't on disk yet (download on
+   *  demand via upgradeModel()). */
+  upgrade?: string;
 }
 
 /** GPU execution provider this platform's onnxruntime-node ships, if any.
@@ -64,21 +125,27 @@ export function resolvePrecision(
   return "q8";
 }
 
-/** Ordered backends to try: the GPU first (if wanted and present), then CPU. */
+/**
+ * Ordered backends to try: the GPU first (if wanted and present), then CPU.
+ * With auto precision, a preferred precision that isn't on disk is swapped for
+ * the bundled q8 (so it works offline) and offered as an `upgrade` instead.
+ */
 export function planBackends(
   prefs: ModelPrefs,
   platform: string = process.platform,
-  arch: string = process.arch
+  arch: string = process.arch,
+  isLocal: (dtype: string) => boolean = modelIsLocal
 ): Backend[] {
+  const pick = (device: string): Backend => {
+    const dtype = resolvePrecision(prefs.precision, device, platform, arch);
+    return prefs.precision === "auto" && dtype !== "q8" && !isLocal(dtype)
+      ? { device, dtype: "q8", upgrade: dtype }
+      : { device, dtype };
+  };
   const plan: Backend[] = [];
   const gpu = gpuDevice(platform);
-  if (prefs.device !== "cpu" && gpu) {
-    plan.push({ device: gpu, dtype: resolvePrecision(prefs.precision, gpu, platform, arch) });
-  }
-  const cpu: Backend = {
-    device: "cpu",
-    dtype: resolvePrecision(prefs.precision, "cpu", platform, arch),
-  };
+  if (prefs.device !== "cpu" && gpu) plan.push(pick(gpu));
+  const cpu = pick("cpu");
   if (prefs.device === "gpu" && !gpu) {
     cpu.fallbackReason = `no GPU backend on ${platform}`;
   }
@@ -119,6 +186,7 @@ function errText(e: unknown): string {
 }
 
 async function loadOn(b: Backend, onProgress?: (pct: number) => void): Promise<any> {
+  await modelEnv();
   const m = await kokoro();
   const tts = await m.KokoroTTS.from_pretrained(MODEL_ID, {
     dtype: b.dtype,
@@ -171,11 +239,35 @@ function track(p: Promise<Loaded>): Promise<Loaded> {
 }
 
 function load(onProgress?: (pct: number) => void): Promise<Loaded> {
-  return loadedPromise ?? track(loadWithFallback(planBackends(prefs), onProgress));
+  return (
+    loadedPromise ??
+    track(
+      // Plan after the env is set up: planning checks which weights are on disk.
+      modelEnv().then(() => loadWithFallback(planBackends(prefs), onProgress))
+    )
+  );
 }
 
 export function loadModel(onProgress?: (pct: number) => void): Promise<any> {
   return load(onProgress).then((l) => l.tts);
+}
+
+/** Download (if needed) and switch to the current backend's suggested faster
+ *  precision. Resolves to the new backend; throws (staying on the current
+ *  model) if the download or load fails. */
+export async function upgradeModel(onProgress?: (pct: number) => void): Promise<Backend> {
+  const cur = (await load()).backend;
+  if (!cur.upgrade) return cur;
+  const next: Backend = { device: cur.device, dtype: cur.upgrade, fallbackReason: cur.fallbackReason };
+  const prev = loadedPromise;
+  const p = loadWithFallback([next], onProgress);
+  const loaded = await p; // on failure the current model stays loaded
+  // Adopt it unless the settings changed (and dropped the model) meanwhile.
+  if (loadedPromise === prev) {
+    loadedPromise = p;
+    backend = loaded.backend;
+  }
+  return loaded.backend;
 }
 
 /** The GPU failed mid-run (e.g. device lost after sleep): reload on CPU. */

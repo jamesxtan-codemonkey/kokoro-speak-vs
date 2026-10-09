@@ -1,6 +1,8 @@
 # Source + tooling not needed at runtime. dist/extension.js is the bundled host;
-# runtime deps (kokoro-js, @huggingface/transformers, onnxruntime-node, sharp)
-# are included from node_modules by vsce (NOT excluded here).
+# runtime deps (kokoro-js, @huggingface/transformers, onnxruntime-node, audify)
+# are included from node_modules by vsce (NOT excluded here), and models/ holds
+# the bundled q8 Kokoro model (scripts/fetch-model.mjs). Build the VSIX with
+# scripts/package.mjs, which stages the target platform's native binaries.
 .vscode/**
 src/**
 # The standalone MCP server is not part of the VS Code extension (it's built and
@@ -38,7 +40,16 @@ node_modules/onnxruntime-node/script/**
 node_modules/tar/**
 
 # Other platforms' onnxruntime binaries are trimmed per target by
-# scripts/package.mjs (npm run package), which packages for the host platform.
+# scripts/package.mjs, which also swaps sharp for a stub (transformers.js only
+# calls it for images) and installs the target's audify prebuilt.
+
+# Browser builds — Node loads only transformers.node.{mjs,cjs} / kokoro.js.
+node_modules/@huggingface/transformers/dist/ort-wasm-*
+node_modules/@huggingface/transformers/dist/transformers.js
+node_modules/@huggingface/transformers/dist/transformers.min.js
+node_modules/@huggingface/transformers/dist/transformers.web*.js
+node_modules/@huggingface/transformers/dist/transformers.node.min.*
+node_modules/kokoro-js/dist/kokoro.web.js
 
 # Prune obvious dev weight from the bundled dependency tree.
 node_modules/**/*.md
@@ -53,6 +64,10 @@ node_modules/.bin/**
 # audify build/install-time tooling — not needed at runtime (it loads the
 # prebuilt build/Release/audify.node via `bindings`).
 node_modules/cmake-js/**
+node_modules/audify/vendor/**
+node_modules/audify/src/**
+node_modules/audify/CMakeLists.txt
+node_modules/audify/binding.gyp
 node_modules/prebuild-install/**
 node_modules/audify/node_modules/node-abi/**
 node_modules/audify/node_modules/node-addon-api/**

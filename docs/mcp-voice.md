@@ -77,6 +77,9 @@ paste its guidance into your prompt/instructions.
   `auto` logic as the extension, falling back to the CPU). Override with env
   vars in the server registration: `KOKORO_SPEAK_DEVICE` = `auto` | `gpu` | `cpu`
   and `KOKORO_SPEAK_PRECISION` = `auto` | `q8` | `fp16` | `fp32`.
+- **Offline:** run `npm run fetch-model` once and the server uses the model in
+  `<repo>/models` (the same one the VSIX bundles) instead of downloading it;
+  `KOKORO_SPEAK_OFFLINE=1` forbids downloads entirely.
 - `speak` **blocks until the audio finishes** — keep spoken text short; don't
   queue many long calls. Call `speak` again to interrupt.
 - stdout is the MCP JSON-RPC channel; the server routes all library logging to

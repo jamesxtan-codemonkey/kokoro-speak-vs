@@ -17,3 +17,5 @@ out.log
 .DS_Store
 .gstack/
 **/.gstack/
+# Bundled model (npm run fetch-model)
+models/
