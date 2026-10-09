@@ -1,4 +1,5 @@
-// macOS-first PCM streaming via audify (RtAudio → CoreAudio). One persistent
+// PCM streaming via audify (RtAudio → CoreAudio on macOS, WASAPI on Windows,
+// ALSA/Pulse on Linux). One persistent
 // output stream that we write 16-bit PCM frames into as sentences synthesize, for
 // native gapless playback with exact pause/resume and instant stop.
 //
@@ -139,8 +140,13 @@ export class PcmStreamPlayer implements AudioPlayer {
     private cb: AudioCallbacks,
     mod: any
   ) {
-    const { RtAudio, RtAudioFormat } = mod;
-    this.rt = new RtAudio();
+    const { RtAudio, RtAudioFormat, RtAudioApi } = mod;
+    // Windows: pin WASAPI (shared mode, the system mixer). RtAudio's default
+    // probe order tries ASIO first, which grabs pro-audio interfaces exclusively.
+    this.rt =
+      process.platform === "win32" && RtAudioApi?.WINDOWS_WASAPI !== undefined
+        ? new RtAudio(RtAudioApi.WINDOWS_WASAPI)
+        : new RtAudio();
     const id = this.rt.getDefaultOutputDevice();
     const dev = this.rt.getDevices().find((d: any) => d.id === id);
     if (!dev) throw new Error("no default output device");

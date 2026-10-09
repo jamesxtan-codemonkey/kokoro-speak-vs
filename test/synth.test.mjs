@@ -1,13 +1,14 @@
 // Tests for chunkText — the splitter that keeps each Kokoro generation under the
 // model's ~512-token cap (over-long generations get truncated, dropping the
-// tail). Pure function; bundled to test/.synth.cjs.
+// tail) — and for backend planning (GPU/CPU, weight precision). Pure functions;
+// bundled to test/.synth.cjs.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { chunkText } = require("./.synth.cjs");
+const { chunkText, planBackends, resolvePrecision, gpuDevice } = require("./.synth.cjs");
 
 // The exact text from the bug report (a clause was dropped because Kokoro's own
 // splitter merged 4 sentences into one over-long, truncated generation).
@@ -57,4 +58,47 @@ test("chunkText word-packs an over-long single sentence", () => {
 test("chunkText handles empty/whitespace input", () => {
   assert.deepEqual(chunkText(""), []);
   assert.deepEqual(chunkText("   \n  "), []);
+});
+
+test("gpuDevice: DirectML on Windows, none elsewhere", () => {
+  assert.equal(gpuDevice("win32"), "dml");
+  assert.equal(gpuDevice("darwin"), undefined);
+  assert.equal(gpuDevice("linux"), undefined);
+});
+
+test("resolvePrecision auto: q8 on GPU, fp32 on Windows x64 CPU, q8 on other CPUs", () => {
+  assert.equal(resolvePrecision("auto", "dml", "win32", "x64"), "q8");
+  assert.equal(resolvePrecision("auto", "cpu", "win32", "x64"), "fp32");
+  assert.equal(resolvePrecision("auto", "cpu", "win32", "arm64"), "q8");
+  assert.equal(resolvePrecision("auto", "cpu", "darwin", "arm64"), "q8");
+  assert.equal(resolvePrecision("auto", "cpu", "linux", "x64"), "q8");
+  // explicit precision always wins
+  assert.equal(resolvePrecision("fp16", "dml", "win32", "x64"), "fp16");
+  assert.equal(resolvePrecision("q8", "cpu", "win32", "x64"), "q8");
+});
+
+test("planBackends: Windows auto tries DirectML first, then CPU", () => {
+  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64");
+  assert.deepEqual(plan, [
+    { device: "dml", dtype: "q8" },
+    { device: "cpu", dtype: "fp32" },
+  ]);
+});
+
+test("planBackends: device cpu skips the GPU", () => {
+  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64");
+  assert.deepEqual(plan, [{ device: "cpu", dtype: "fp32" }]);
+});
+
+test("planBackends: macOS auto stays on CPU q8 (unchanged behavior)", () => {
+  const plan = planBackends({ device: "auto", precision: "auto" }, "darwin", "arm64");
+  assert.deepEqual(plan, [{ device: "cpu", dtype: "q8" }]);
+  assert.equal(plan[0].fallbackReason, undefined, "auto on a GPU-less platform is not a fallback");
+});
+
+test("planBackends: device gpu without a GPU backend explains the CPU fallback", () => {
+  const plan = planBackends({ device: "gpu", precision: "auto" }, "linux", "x64");
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].device, "cpu");
+  assert.match(plan[0].fallbackReason, /no GPU backend on linux/);
 });

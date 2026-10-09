@@ -8,8 +8,10 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 
 ## How it works
 
-- **Synthesis runs in the extension host** via `onnxruntime-node` (`device: "cpu"`),
-  ~3x realtime. No webview, no CSP, no browser autoplay restrictions.
+- **Synthesis runs in the extension host** via `onnxruntime-node`. No webview, no
+  CSP, no browser autoplay restrictions. Where it runs is set by
+  `kokoroSpeak.device` (see [GPU acceleration](#gpu-acceleration-windows)): the
+  GPU via DirectML on Windows (~25x realtime), otherwise the CPU (~3–4x).
 - Text is split into sentences (`tts.stream()` + an explicit `TextSplitterStream`
   we `close()`). Each sentence is played as soon as it's synthesized — and because
   host synthesis (~3x) outruns playback, the rest are always ready in time.
@@ -18,10 +20,12 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
   16-bit PCM into one persistent output stream (Kokoro's 24 kHz resampled to the
   device rate). This is natively gapless and gives **exact, instant pause/resume**
   (`rt.stop()`/`start()` at the precise sample) and **instant stop** — no temp
-  files. This is the macOS path.
+  files. This is the macOS and Windows path (Windows uses WASAPI, the shared
+  system mixer — pinned explicitly so ASIO drivers aren't grabbed).
 - **Fallback — file players** (`src/player.ts`): if `audify` can't load (or on a
   platform without it), each sentence is written to a temp WAV and played with the
-  OS CLI player (`afplay`/`paplay`/`aplay`/`ffplay`). Those can't be fed a stream
+  OS CLI player (`afplay`/`paplay`/`aplay`/`ffplay`; PowerShell's `SoundPlayer`
+  on Windows). Those can't be fed a stream
   and have a fixed ~0.85 s startup, so the `StreamPlayer` hides it by spawning
   segment N+1 exactly `duration(N)` after segment N — the startup overlaps the
   previous tail and seams line up. (Verified: three 1.0 s segments play in ~3.9 s,
@@ -34,6 +38,42 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 > kokoro-js is ESM-only and the host bundle is CommonJS, so it's loaded with a
 > real dynamic `import()` (hidden from esbuild) to avoid `ERR_REQUIRE_ESM` on the
 > Node that ships in VS Code.
+
+## GPU acceleration (Windows)
+
+On Windows, Kokoro runs on the GPU through **DirectML**, which works with any
+DirectX 12 GPU (NVIDIA, AMD, Intel; integrated GPUs included). No CUDA install is
+needed — `DirectML.dll` ships inside `onnxruntime-node`.
+
+| Setting | Values |
+|---|---|
+| `kokoroSpeak.device` | `auto` (default: GPU if the platform has one, else CPU) · `gpu` · `cpu` |
+| `kokoroSpeak.precision` | `auto` (default) · `q8` · `fp16` · `fp32` |
+
+The GPU is checked with a short warm-up line when the model loads. If it fails
+(no DirectX 12 device, a remote session without a GPU, a driver error), or the
+GPU fails mid-run (e.g. device lost after sleep), synthesis switches to the CPU,
+warns once, and keeps playing. The status-bar tooltip shows the engine in use,
+e.g. *GPU (DirectML), q8*. Changing either setting reloads the model on the next
+Speak.
+
+Measured on an RTX 4090 / i7-10700, `onnxruntime-node` 1.30:
+
+| Backend | q8 | fp16 | fp32 |
+|---|---|---|---|
+| DirectML (GPU) | **~25–30x** | ~6x | ~6x |
+| CPU (x64) | ~1.2x | ~5x | ~4x |
+
+So `auto` precision picks **q8 on the GPU** and **fp32 on a Windows x64 CPU** (q8
+is barely faster than playback there, which causes gaps). DirectML only keeps its
+fast path for the first input shape it sees, and every sentence has a different
+length; the quantized model's ops stay fast regardless, the float models don't.
+macOS and Linux keep CPU + q8 as before.
+
+> DirectML needs `onnxruntime-node` ≥ 1.22 — 1.21 (the version
+> `@huggingface/transformers` 3.8 pins) fails on Kokoro's `ConvTranspose`.
+> `package.json` `overrides` pins `onnxruntime-node`/`onnxruntime-common` to
+> 1.30.0.
 
 ## Features
 
@@ -51,7 +91,8 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - Markdown preview is handled: the keybinding works there and the underlying
   document is spoken with Markdown syntax stripped (`src/textprep.ts`).
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),
-  `kokoroSpeak.bufferSeconds`, plus a **Select Voice** quick-pick.
+  `kokoroSpeak.bufferSeconds`, `kokoroSpeak.device` / `kokoroSpeak.precision`,
+  plus a **Select Voice** quick-pick.
 
 ## Normalization
 
@@ -117,6 +158,13 @@ Host synthesis is verified in Node (`src/synth.ts`): real Kokoro stream
 concatenates sentences into one gapless WAV at ~2.5–3x realtime; the OS player
 (`src/player.ts`) is verified for finish/pause/stop and fallback.
 
+The round-trip runs on CPU by default. To verify another backend, set
+`KOKORO_DEVICE` / `KOKORO_DTYPE`, e.g. the Windows GPU path:
+
+```powershell
+$env:KOKORO_DEVICE="dml"; node --test test/roundtrip.test.mjs
+```
+
 ## Layout
 
 | Path                   | What                                                         |
@@ -133,7 +181,7 @@ concatenates sentences into one gapless WAV at ~2.5–3x realtime; the OS player
 ## Run it (F5)
 
 ```bash
-npm install     # approve native postinstalls (onnxruntime-node, esbuild)
+npm install     # approve native postinstalls (onnxruntime-node, audify, esbuild)
 npm run build   # bundle the extension host (dist/extension.js)
 # press F5 → "Run Kokoro Speak (Extension)", then select text → Cmd/Ctrl+Alt+S
 ```
@@ -143,8 +191,14 @@ npm run build   # bundle the extension host (dist/extension.js)
 
 ## Packaging note
 
-`npm run package` builds a VSIX, but because it bundles the native ML runtime
-(`onnxruntime-node` + `@huggingface/transformers`) the result is **large
-(~300MB) and platform-specific**. That's the trade for host-side synthesis
-(fast, gapless, no webview). For real distribution this needs per-platform
-targets and aggressive trimming; for local use, F5 is the intended path.
+`npm run package` (or `npm run build:vsix` to clean + typecheck first) builds a
+**platform-specific VSIX for the machine you run it on**, e.g.
+`kokoro-speak-vs-win32-x64-<version>.vsix` (~80 MB on Windows). It bundles native
+code — `onnxruntime-node`, `audify`, `sharp` — and npm only installs the host's
+builds of those, so package on each platform you want to ship.
+[scripts/package.mjs](scripts/package.mjs) passes `--target` to vsce and drops
+every other platform's `onnxruntime-node` binaries (which that package ships
+for all platforms). Model weights are downloaded on first use, not bundled. For
+local use, F5 is still the quickest path.
+
+All npm scripts run under both cmd.exe (Windows) and sh (macOS/Linux).

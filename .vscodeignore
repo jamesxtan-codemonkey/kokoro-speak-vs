@@ -37,11 +37,8 @@ node_modules/protobufjs/**
 node_modules/onnxruntime-node/script/**
 node_modules/tar/**
 
-# Trim native binaries for other platforms — this VSIX targets the local one.
-# (For multi-platform publishing, build per-target VSIXs instead.)
-node_modules/onnxruntime-node/bin/napi-v3/linux/**
-node_modules/onnxruntime-node/bin/napi-v3/win32/**
-node_modules/onnxruntime-node/bin/napi-v3/darwin/x64/**
+# Other platforms' onnxruntime binaries are trimmed per target by
+# scripts/package.mjs (npm run package), which packages for the host platform.
 
 # Prune obvious dev weight from the bundled dependency tree.
 node_modules/**/*.md

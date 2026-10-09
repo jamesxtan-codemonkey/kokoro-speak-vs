@@ -4,6 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const N = require("./.normalize.cjs");
@@ -135,3 +138,55 @@ function baseOpts(over = {}) {
     ...over,
   };
 }
+
+// Windows: npm installs claude/codex as .cmd shims, which Node won't spawn
+// without a shell. A fake shim in a dir with a space checks quoting, that the
+// empty --allowed-tools value survives, and that the prompt arrives on stdin.
+const winOnly = { skip: process.platform !== "win32" && "Windows-only" };
+
+test("cli backend runs a Windows .cmd shim (quoted path, args, stdin)", winOnly, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kokoro cli "));
+  try {
+    const shim = join(dir, "fake-claude.cmd");
+    writeFileSync(
+      shim,
+      [
+        "@echo off",
+        'echo %* > "%~dp0args.txt"',
+        'more > "%~dp0stdin.txt"',
+        'echo {"result":"spoken text"}',
+      ].join("\r\n")
+    );
+    const out = await N.callBackend("SYSTEM", "USER TEXT", {
+      backend: "cli",
+      command: shim,
+      model: "",
+      timeoutMs: 15000,
+    });
+    assert.equal(out, "spoken text");
+    const args = readFileSync(join(dir, "args.txt"), "utf8").trim();
+    assert.equal(args, '"-p" "--output-format" "json" "--allowed-tools" ""');
+    assert.match(readFileSync(join(dir, "stdin.txt"), "utf8"), /SYSTEM[\s\S]*USER TEXT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cli backend timeout kills a hung Windows .cmd shim", winOnly, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "kokoro cli "));
+  try {
+    const shim = join(dir, "hang.cmd");
+    writeFileSync(shim, "@echo off\r\nping -n 30 127.0.0.1 >nul\r\n");
+    const t0 = Date.now();
+    const out = await N.callBackend("s", "u", {
+      backend: "cli",
+      command: shim,
+      model: "",
+      timeoutMs: 1000,
+    });
+    assert.equal(out, null);
+    assert.ok(Date.now() - t0 < 5000, "timeout must resolve promptly");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

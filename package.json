@@ -118,6 +118,38 @@
           "minimum": 0,
           "description": "Segment size for streaming playback. 0 = stream per sentence, so audio starts as soon as the first sentence is synthesized (lowest latency). Playback stays gapless either way — segments are scheduled so each player launch's startup is hidden under the previous segment. A larger value groups more audio per segment (fewer, longer segments)."
         },
+        "kokoroSpeak.device": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "gpu",
+            "cpu"
+          ],
+          "enumDescriptions": [
+            "Use the GPU when this platform has a supported backend (Windows: DirectML, any DirectX 12 GPU), else the CPU. Falls back to the CPU if the GPU fails.",
+            "Prefer the GPU (same as auto today; falls back to the CPU if unavailable).",
+            "Always synthesize on the CPU."
+          ],
+          "description": "Where Kokoro runs. On Windows the GPU (DirectML) is ~25x realtime vs ~4x on the CPU. Changing this reloads the model on the next Speak."
+        },
+        "kokoroSpeak.precision": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "q8",
+            "fp16",
+            "fp32"
+          ],
+          "enumDescriptions": [
+            "q8 on the GPU and on macOS/Linux CPUs; fp32 on Windows x64 CPUs (q8 is too slow there).",
+            "8-bit quantized weights (~90 MB download).",
+            "Half-precision weights (~165 MB).",
+            "Full-precision weights (~325 MB)."
+          ],
+          "description": "Model weight precision. Leave on auto unless you are troubleshooting. Changing this reloads the model on the next Speak."
+        },
         "kokoroSpeak.normalization.mode": {
           "type": "string",
           "default": "deterministic",
@@ -240,11 +272,11 @@
   "scripts": {
     "spike": "node scripts/spike.mjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --outfile=dist/extension.js",
-    "build:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=cjs --external:audify --banner:js='#!/usr/bin/env node' --outfile=dist/mcp.js && chmod +x dist/mcp.js",
+    "build:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=cjs --external:audify \"--banner:js=#!/usr/bin/env node\" --outfile=dist/mcp.js && node -e \"require('fs').chmodSync('dist/mcp.js', 0o755)\"",
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js",
-    "package": "vsce package",
-    "clean": "rm -rf dist *.vsix",
+    "package": "node scripts/package.mjs",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});for(const f of fs.readdirSync('.'))if(f.endsWith('.vsix'))fs.rmSync(f)\"",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
     "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --format=cjs --outfile=test/.synth.cjs",
@@ -264,8 +296,12 @@
     "esbuild": "^0.28.1",
     "typescript": "^5.5.0"
   },
+  "overrides": {
+    "onnxruntime-node": "1.30.0",
+    "onnxruntime-common": "1.30.0"
+  },
   "allowScripts": {
-    "onnxruntime-node@1.21.0": true,
+    "onnxruntime-node@1.30.0": true,
     "audify@1.10.1": true,
     "esbuild@0.28.1": true,
     "@vscode/vsce-sign": false,

@@ -1,7 +1,15 @@
 import * as vscode from "vscode";
 import { getSpeakableText } from "./textprep";
 import { AudioPlayer, AudioCallbacks, createPlayer } from "./pcmplayer";
-import { loadModel, synthesize } from "./synth";
+import {
+  loadModel,
+  synthesize,
+  configureModel,
+  currentBackend,
+  describeBackend,
+  DevicePref,
+  PrecisionPref,
+} from "./synth";
 import { VOICES, isVoice } from "./voices";
 import {
   normalize,
@@ -42,7 +50,8 @@ type Phase =
 let status: vscode.StatusBarItem;
 let player: AudioPlayer | undefined;
 let currentPhase: Phase = "idle";
-let modelReady = false;
+// Fallback reasons already shown, so a broken GPU warns once, not every Speak.
+const warnedFallbacks = new Set<string>();
 let extContext: vscode.ExtensionContext;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
@@ -57,6 +66,18 @@ export function activate(context: vscode.ExtensionContext) {
   status.command = "kokoroSpeak.statusClick";
   setStatus("idle");
   context.subscriptions.push(status);
+
+  applyModelPrefs();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration("kokoroSpeak.device") ||
+        e.affectsConfiguration("kokoroSpeak.precision")
+      ) {
+        applyModelPrefs();
+      }
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("kokoroSpeak.speakSelection", () => {
@@ -144,6 +165,28 @@ async function resolveAiConsent(): Promise<boolean> {
   return ok;
 }
 
+/** Push device/precision settings to the synth. A change drops the loaded
+ *  model, so the next Speak shows "Loading model…" while it reloads. */
+function applyModelPrefs() {
+  const cfg = vscode.workspace.getConfiguration("kokoroSpeak");
+  const before = currentBackend();
+  configureModel({
+    device: cfg.get<DevicePref>("device", "auto"),
+    precision: cfg.get<PrecisionPref>("precision", "auto"),
+  });
+  if (currentBackend() !== before && currentPhase === "idle") setStatus("idle");
+}
+
+/** Tell the user (once per reason) when the GPU was wanted but we're on CPU. */
+function warnIfFellBack() {
+  const b = currentBackend();
+  if (!b?.fallbackReason || warnedFallbacks.has(b.fallbackReason)) return;
+  warnedFallbacks.add(b.fallbackReason);
+  vscode.window.showWarningMessage(
+    `Kokoro Speak: GPU unavailable, using ${describeBackend(b)} (${b.fallbackReason}).`
+  );
+}
+
 export function deactivate() {
   activeReq = ++reqSeq;
   player?.stop();
@@ -178,7 +221,8 @@ function speak(text: string | undefined, what: string) {
       if (cancelled()) return;
       setStatus("error");
       vscode.window.showErrorMessage(
-        "Kokoro Speak: no audio player found. Install one " +
+        "Kokoro Speak: no audio output found. Check that an output device " +
+          "is enabled (Windows: Sound settings), or install a player " +
           "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
       );
     },
@@ -202,13 +246,13 @@ function speak(text: string | undefined, what: string) {
         setStatus("idle");
         return;
       }
-      if (!modelReady) {
+      if (!currentBackend()) {
         setStatus("loading", "Loading model…");
         await loadModel((pct) =>
           setStatus("loading", `Downloading model: ${pct}%`)
         );
-        modelReady = true;
         if (cancelled()) return;
+        warnIfFellBack();
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
       await synthesize(
@@ -228,6 +272,7 @@ function speak(text: string | undefined, what: string) {
         }
       );
       if (!cancelled()) sp.end();
+      warnIfFellBack(); // the GPU can also fail mid-run (CPU took over)
     } catch (err: any) {
       if (cancelled()) return;
       setStatus("error");
@@ -570,7 +615,10 @@ function setStatus(phase: Phase, detail?: string) {
   const active = phase === "speaking" || phase === "paused";
   const tip = new vscode.MarkdownString(undefined, true);
   tip.isTrusted = true;
-  tip.appendMarkdown("**Kokoro TTS**\n\n");
+  tip.appendMarkdown("**Kokoro TTS**");
+  const engine = currentBackend();
+  if (engine) tip.appendMarkdown(` — _${describeBackend(engine)}_`);
+  tip.appendMarkdown("\n\n");
   // Primary hover action: speak whatever's on the clipboard (works from the
   // Claude Code panel, Markdown preview, anywhere — copy, then click).
   tip.appendMarkdown("[$(play) Speak clipboard](command:kokoroSpeak.speakClipboard)");

@@ -25,7 +25,8 @@ npm run build:mcp        # → dist/mcp.js (executable, runs with node)
 ```
 
 The absolute path you'll register is `<repo>/dist/mcp.js`, e.g.
-`/Users/you/code/kokoro-speak-vs/dist/mcp.js`.
+`/Users/you/code/kokoro-speak-vs/dist/mcp.js` (Windows: `C:\code\kokoro-speak-vs\dist\mcp.js` —
+use forward slashes or escaped backslashes inside JSON/TOML strings).
 
 ## Register it
 
@@ -68,10 +69,14 @@ paste its guidance into your prompt/instructions.
 ## Notes & limits
 
 - **Local audio only.** The server plays on whatever machine it runs on, so it's
-  for local agents (Claude Code / Codex on your Mac). A cloud agent has no
+  for local agents (Claude Code / Codex on your machine). A cloud agent has no
   speakers.
-- **macOS** uses native PCM streaming (audify → CoreAudio): exact pause-free
+- **macOS and Windows** use native PCM streaming (audify → CoreAudio / WASAPI): exact pause-free
   playback, instant interrupt. Other platforms fall back to the OS CLI player.
+- **GPU:** on Windows the server synthesizes on the GPU via DirectML (same
+  `auto` logic as the extension, falling back to the CPU). Override with env
+  vars in the server registration: `KOKORO_SPEAK_DEVICE` = `auto` | `gpu` | `cpu`
+  and `KOKORO_SPEAK_PRECISION` = `auto` | `q8` | `fp16` | `fp32`.
 - `speak` **blocks until the audio finishes** — keep spoken text short; don't
   queue many long calls. Call `speak` again to interrupt.
 - stdout is the MCP JSON-RPC channel; the server routes all library logging to

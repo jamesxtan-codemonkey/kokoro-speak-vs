@@ -1,4 +1,5 @@
-// Host-side Kokoro synthesis (onnxruntime-node, ~3x realtime). Runs in the
+// Host-side Kokoro synthesis (onnxruntime-node: CPU ~3-4x realtime, DirectML GPU
+// on Windows ~25x). Runs in the
 // extension host — no webview, no CSP, no autoplay. Streams sentences and emits
 // concatenated WAV segments. Kept free of `vscode` imports so it can be tested
 // in plain Node.
@@ -18,26 +19,171 @@ async function kokoro(): Promise<any> {
 }
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const DTYPE = "q8";
 const MAX_BUFFER_SEC = 600;
 
-let ttsPromise: Promise<any> | undefined;
+/** "auto" = the platform GPU if there is one (DirectML on Windows), else CPU. */
+export type DevicePref = "auto" | "gpu" | "cpu";
+/** Model weights: "auto" picks per device (see resolvePrecision). */
+export type PrecisionPref = "auto" | "q8" | "fp16" | "fp32";
+
+export interface ModelPrefs {
+  device: DevicePref;
+  precision: PrecisionPref;
+}
+
+/** The backend a loaded model actually runs on. */
+export interface Backend {
+  /** transformers.js device id: "dml" | "cpu". */
+  device: string;
+  dtype: string;
+  /** Why we're not on the preferred GPU, if we fell back. */
+  fallbackReason?: string;
+}
+
+/** GPU execution provider this platform's onnxruntime-node ships, if any.
+ *  Windows bundles DirectML (any D3D12 GPU: NVIDIA, AMD, Intel). */
+export function gpuDevice(platform: string = process.platform): string | undefined {
+  return platform === "win32" ? "dml" : undefined;
+}
+
+/**
+ * Weights per device. Measured on Windows x64 (RTX 4090 / i7-10700, ORT 1.30):
+ * - dml: q8 ≈ 28x realtime. fp32/fp16 drop to ≈ 6x — DirectML only keeps its
+ *   fast path for the first input shape, and every sentence has a new length.
+ * - cpu (x64): q8 ≈ 1.2x (too slow — playback outruns synthesis), fp32 ≈ 4x.
+ * Elsewhere CPU keeps q8 (≈ 3x on Apple silicon, 1/4 the download).
+ */
+export function resolvePrecision(
+  pref: PrecisionPref,
+  device: string,
+  platform: string = process.platform,
+  arch: string = process.arch
+): string {
+  if (pref !== "auto") return pref;
+  if (device === "cpu" && platform === "win32" && arch === "x64") return "fp32";
+  return "q8";
+}
+
+/** Ordered backends to try: the GPU first (if wanted and present), then CPU. */
+export function planBackends(
+  prefs: ModelPrefs,
+  platform: string = process.platform,
+  arch: string = process.arch
+): Backend[] {
+  const plan: Backend[] = [];
+  const gpu = gpuDevice(platform);
+  if (prefs.device !== "cpu" && gpu) {
+    plan.push({ device: gpu, dtype: resolvePrecision(prefs.precision, gpu, platform, arch) });
+  }
+  const cpu: Backend = {
+    device: "cpu",
+    dtype: resolvePrecision(prefs.precision, "cpu", platform, arch),
+  };
+  if (prefs.device === "gpu" && !gpu) {
+    cpu.fallbackReason = `no GPU backend on ${platform}`;
+  }
+  plan.push(cpu);
+  return plan;
+}
+
+interface Loaded {
+  tts: any;
+  backend: Backend;
+}
+
+let prefs: ModelPrefs = { device: "auto", precision: "auto" };
+let loadedPromise: Promise<Loaded> | undefined;
+let backend: Backend | undefined;
+
+/** Set device/precision. A change drops the loaded model; the next
+ *  loadModel() reloads it on the new backend. */
+export function configureModel(next: ModelPrefs): void {
+  if (next.device === prefs.device && next.precision === prefs.precision) return;
+  prefs = { ...next };
+  loadedPromise = undefined;
+  backend = undefined;
+}
+
+/** The backend the current model runs on (undefined until loaded). */
+export function currentBackend(): Backend | undefined {
+  return backend;
+}
+
+export function describeBackend(b: Backend): string {
+  const where = b.device === "dml" ? "GPU (DirectML)" : b.device === "cpu" ? "CPU" : b.device;
+  return `${where}, ${b.dtype}`;
+}
+
+function errText(e: unknown): string {
+  return String((e as any)?.message ?? e).split("\n")[0].slice(0, 200);
+}
+
+async function loadOn(b: Backend, onProgress?: (pct: number) => void): Promise<any> {
+  const m = await kokoro();
+  const tts = await m.KokoroTTS.from_pretrained(MODEL_ID, {
+    dtype: b.dtype,
+    device: b.device,
+    progress_callback: (p: any) => {
+      if (p?.status === "progress" && typeof p.progress === "number") {
+        onProgress?.(Math.round(p.progress));
+      }
+    },
+  });
+  // A GPU can accept the model at load and still reject an op at run time
+  // (e.g. DirectML on older onnxruntime fails Kokoro's ConvTranspose), so prove
+  // it with one short line. This also compiles the GPU kernels up front.
+  if (b.device !== "cpu") await tts.generate("Ready.", { voice: "af_heart" });
+  return tts;
+}
+
+async function loadWithFallback(
+  plan: Backend[],
+  onProgress?: (pct: number) => void
+): Promise<Loaded> {
+  let lastErr: unknown;
+  let reason: string | undefined;
+  for (const b of plan) {
+    try {
+      const tts = await loadOn(b, onProgress);
+      return { tts, backend: { ...b, fallbackReason: b.fallbackReason ?? reason } };
+    } catch (e) {
+      lastErr = e;
+      reason = `${b.device} failed: ${errText(e)}`;
+      console.warn(`[kokoro-speak] ${reason}; trying the next backend`);
+    }
+  }
+  throw lastErr;
+}
+
+/** Install `p` as the current load. Publishes its backend once loaded, unless a
+ *  newer load replaced it; a failure isn't cached, so the next call retries. */
+function track(p: Promise<Loaded>): Promise<Loaded> {
+  loadedPromise = p;
+  p.then(
+    (l) => {
+      if (loadedPromise === p) backend = l.backend;
+    },
+    () => {
+      if (loadedPromise === p) loadedPromise = undefined;
+    }
+  );
+  return p;
+}
+
+function load(onProgress?: (pct: number) => void): Promise<Loaded> {
+  return loadedPromise ?? track(loadWithFallback(planBackends(prefs), onProgress));
+}
 
 export function loadModel(onProgress?: (pct: number) => void): Promise<any> {
-  if (!ttsPromise) {
-    ttsPromise = kokoro().then((m) =>
-      m.KokoroTTS.from_pretrained(MODEL_ID, {
-        dtype: DTYPE,
-        device: "cpu",
-        progress_callback: (p: any) => {
-          if (p?.status === "progress" && typeof p.progress === "number") {
-            onProgress?.(Math.round(p.progress));
-          }
-        },
-      })
-    );
-  }
-  return ttsPromise;
+  return load(onProgress).then((l) => l.tts);
+}
+
+/** The GPU failed mid-run (e.g. device lost after sleep): reload on CPU. */
+function fallBackToCpu(failed: Backend, err: unknown): Promise<Loaded> {
+  const cpu = planBackends(prefs).find((b) => b.device === "cpu")!;
+  cpu.fallbackReason = `${failed.device} failed: ${errText(err)}`;
+  console.warn(`[kokoro-speak] ${cpu.fallbackReason}; switching to CPU`);
+  return track(loadWithFallback([cpu]));
 }
 
 /** Encode mono Float32 samples as a 16-bit PCM WAV Buffer. */
@@ -140,8 +286,18 @@ export async function synthesize(
   { voice = "af_heart", speed = 1, bufferSeconds = 0 }: SynthOptions,
   cb: SynthCallbacks
 ): Promise<number> {
-  const tts = await loadModel();
+  let loaded = await load();
   if (cb.shouldCancel()) return 0;
+
+  const generate = async (chunk: string) => {
+    try {
+      return await loaded.tts.generate(chunk, { voice: voice as any, speed });
+    } catch (e) {
+      if (loaded.backend.device === "cpu") throw e;
+      loaded = await fallBackToCpu(loaded.backend, e);
+      return loaded.tts.generate(chunk, { voice: voice as any, speed });
+    }
+  };
 
   let parts: Float32Array[] = [];
   let bufferedSamples = 0;
@@ -163,7 +319,7 @@ export async function synthesize(
 
   for (const chunk of chunkText(text)) {
     if (cb.shouldCancel()) return count;
-    const audio = await tts.generate(chunk, { voice: voice as any, speed });
+    const audio = await generate(chunk);
     parts.push(audio.audio);
     bufferedSamples += audio.audio.length;
     rate = audio.sampling_rate;

@@ -17,9 +17,21 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Speaker } from "./speaker";
+import { configureModel, DevicePref, PrecisionPref } from "./synth";
 import { VOICES, DEFAULT_VOICE, describeVoice } from "./voices";
 // Single source of truth for the version (inlined from package.json at build).
 import { version } from "../package.json";
+
+// Optional backend overrides (same values as the extension's kokoroSpeak.device /
+// kokoroSpeak.precision settings); invalid values fall back to "auto".
+function envPref<T extends string>(name: string, allowed: readonly T[]): T {
+  const v = process.env[name] as T | undefined;
+  return v && allowed.includes(v) ? v : ("auto" as T);
+}
+configureModel({
+  device: envPref<DevicePref>("KOKORO_SPEAK_DEVICE", ["auto", "gpu", "cpu"]),
+  precision: envPref<PrecisionPref>("KOKORO_SPEAK_PRECISION", ["auto", "q8", "fp16", "fp32"]),
+});
 
 const speaker = new Speaker();
 
