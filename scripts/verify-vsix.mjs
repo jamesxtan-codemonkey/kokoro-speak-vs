@@ -72,6 +72,8 @@ function checkBinary(p) {
 // --- structure ----------------------------------------------------------------
 console.log("\nstructure:");
 check(has("package.json") && has("dist/extension.js"), "extension manifest + bundle");
+const builtFor = has("package.json") && JSON.parse(zip.get(E + "package.json").read()).kokoroSpeakTarget;
+check(builtFor === target, `package.json kokoroSpeakTarget = ${builtFor} (wrong-platform install guard)`);
 for (const f of MODEL_FILES) {
   const e = zip.get(`${E}models/${MODEL_ID}/${f.path}`);
   const sha = e && createHash("sha256").update(e.read()).digest("hex");

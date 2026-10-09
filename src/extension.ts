@@ -61,8 +61,27 @@ let extContext: vscode.ExtensionContext;
 let reqSeq = 0;
 let activeReq = 0;
 
+/**
+ * Packaged VSIXs are platform-specific (native onnxruntime/audify inside), and
+ * VS Code will install one built for another platform without complaint — it
+ * then fails deep inside onnxruntime. Name the problem and the right file.
+ */
+function platformMismatch(context: vscode.ExtensionContext): string | undefined {
+  const builtFor: string | undefined = context.extension.packageJSON?.kokoroSpeakTarget;
+  const host = `${process.platform}-${process.arch}`;
+  if (!builtFor || builtFor === host) return undefined;
+  const version = context.extension.packageJSON?.version ?? "<version>";
+  return (
+    `Kokoro Speak: this package was built for ${builtFor}, but VS Code is running on ${host}. ` +
+    `Uninstall it and install kokoro-speak-vs-${host}-${version}.vsix instead.`
+  );
+}
+let wrongPlatform: string | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
   extContext = context;
+  wrongPlatform = platformMismatch(context);
+  if (wrongPlatform) vscode.window.showErrorMessage(wrongPlatform);
   status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100
@@ -252,6 +271,10 @@ function noSource() {
 }
 
 function speak(text: string | undefined, what: string) {
+  if (wrongPlatform) {
+    vscode.window.showErrorMessage(wrongPlatform);
+    return;
+  }
   const trimmed = text?.trim();
   if (!trimmed) {
     vscode.window.showInformationMessage("Kokoro Speak: nothing to speak.");

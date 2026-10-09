@@ -114,6 +114,9 @@ async function main() {
     const stagedPkg = { ...pkg, scripts: { ...pkg.scripts } };
     delete stagedPkg.scripts["vscode:prepublish"];
     delete stagedPkg.devDependencies;
+    // VS Code will install a VSIX built for another platform without complaint;
+    // the extension checks this at activation and names the right file.
+    stagedPkg.kokoroSpeakTarget = target;
     writeFileSync(join(stage, "package.json"), JSON.stringify(stagedPkg, null, 2) + "\n");
 
     // 3. Copy the production dependency tree, minus other platforms' binaries.
