@@ -22,10 +22,6 @@
     "markdown"
   ],
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/jamesxtan-codemonkey/kokoro-speak-vs.git"
-  },
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"
