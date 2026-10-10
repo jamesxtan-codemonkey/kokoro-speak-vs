@@ -132,13 +132,24 @@ if (target !== host) {
     // Build the real synth module INTO the extracted dist/, so its bundled-model
     // path resolution is exactly what dist/extension.js does.
     const smokeSynth = join(dir, "dist", "smoke-synth.cjs");
-    const esbuild = spawnSync(
-      process.execPath,
-      [join(ROOT, "node_modules", "esbuild", "bin", "esbuild"), join(ROOT, "src", "synth.ts"),
-        "--bundle", "--platform=node", "--format=cjs", "--external:onnxruntime-node", `--outfile=${smokeSynth}`],
-      { encoding: "utf8" }
-    );
-    check(esbuild.status === 0, "build smoke synth" + (esbuild.status ? `: ${esbuild.stderr}` : ""));
+    // Via the API, not the CLI: on macOS/Linux esbuild's postinstall replaces
+    // bin/esbuild with the native binary, so `node bin/esbuild` can't run it.
+    let buildError;
+    try {
+      const { build } = await import("esbuild");
+      await build({
+        entryPoints: [join(ROOT, "src", "synth.ts")],
+        bundle: true,
+        platform: "node",
+        format: "cjs",
+        external: ["onnxruntime-node"],
+        outfile: smokeSynth,
+        logLevel: "silent",
+      });
+    } catch (e) {
+      buildError = e;
+    }
+    check(!buildError, "build smoke synth" + (buildError ? `: ${buildError.message}` : ""));
     const smoke = join(dir, "dist", "smoke.cjs");
     writeFileSync(
       smoke,
