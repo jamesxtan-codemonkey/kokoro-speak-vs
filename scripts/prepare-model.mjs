@@ -5,7 +5,7 @@
 //   npm run prepare-model -- --force
 //
 // The model is produced by tools/convert/convert.py (official hexgrad/Kokoro-82M
-// weights at a pinned revision → validated ONNX). That needs Python 3.10–3.12; the
+// weights at a pinned revision → validated ONNX). That needs Python 3.11–3.12; the
 // script keeps its own virtualenv in .venv-convert (CPU-only torch, ~1 GB).
 // Set PYTHON=/path/to/python to choose the interpreter.
 
@@ -49,10 +49,16 @@ function pythonVersion(cmd, pre = []) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-// kokoro (the official package the converter imports) supports Python 3.10–3.12.
-const PY_MINORS = [12, 11, 10];
+// The pins in tools/convert/requirements.txt bound this: numpy and onnxruntime
+// need Python >= 3.11, kokoro (the official package the converter imports) < 3.13.
+const PY_MINORS = [12, 11];
 
-/** A Python 3.10–3.12 interpreter: $PYTHON, the py launcher, or python3.x. */
+function isSupported(version) {
+  const [major, minor] = (version ?? "0.0").split(".").map(Number);
+  return major === 3 && PY_MINORS.includes(minor);
+}
+
+/** A Python 3.11–3.12 interpreter: $PYTHON, the py launcher, or python3.x. */
 function findPython() {
   const local = process.env.LOCALAPPDATA ?? "";
   const launcher = join(local, "Programs", "Python", "Launcher", "py.exe");
@@ -67,8 +73,7 @@ function findPython() {
   ].filter(Boolean);
   for (const [cmd, pre] of candidates) {
     const v = pythonVersion(cmd, pre);
-    const [major, minor] = (v ?? "0.0").split(".").map(Number);
-    if (major === 3 && PY_MINORS.includes(minor)) return [cmd, pre, v];
+    if (isSupported(v)) return [cmd, pre, v];
   }
   return null;
 }
@@ -87,12 +92,21 @@ export async function prepareModel({ force = false, log = console.log } = {}) {
     log(`[model] ${problem} — converting from the official weights`);
   }
   const py = venvPython();
+  if (existsSync(py)) {
+    // A venv from an unsupported Python (e.g. an older run) can't install the pins.
+    const v = pythonVersion(py);
+    if (!isSupported(v)) {
+      log(`[model] .venv-convert uses Python ${v ?? "(unrunnable)"}, need 3.11–3.12 — recreating it`);
+      rmSync(VENV, { recursive: true, force: true, maxRetries: 5 });
+    }
+  }
   if (!existsSync(py)) {
     const found = findPython();
     if (!found) {
       throw new Error(
-        "Python 3.10–3.12 is needed to convert the Kokoro model (official PyTorch weights → ONNX). " +
-          "Install it (e.g. `winget install Python.Python.3.12` / `brew install python`) or set PYTHON."
+        "Python 3.11 or 3.12 is needed to convert the Kokoro model (official PyTorch weights → ONNX); " +
+          "3.13+ is too new for kokoro. Install 3.12 (e.g. `winget install Python.Python.3.12` / " +
+          "`brew install python@3.12`) or set PYTHON."
       );
     }
     const [cmd, pre, v] = found;

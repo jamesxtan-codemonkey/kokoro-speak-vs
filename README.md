@@ -222,7 +222,7 @@ model (same durations, loudness within 6%, spectral distance within bounds).
 
 ```bash
 npm install            # approve native postinstalls (onnxruntime-node, audify, esbuild)
-npm run prepare-model  # official weights → models/kokoro-speak (Python 3.10–3.12, once)
+npm run prepare-model  # official weights → models/kokoro-speak (Python 3.11–3.12, once)
 npm run build          # bundle the extension host (dist/extension.js)
 # press F5 → "Run Kokoro Speak (Extension)", then select text → Cmd/Ctrl+Alt+S
 ```
