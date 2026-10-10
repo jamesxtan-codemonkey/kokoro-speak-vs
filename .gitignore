@@ -22,3 +22,6 @@ models/
 
 # Model conversion virtualenv (scripts/prepare-model.mjs)
 .venv-convert/
+
+# Local Claude Code settings (per-user permissions)
+.claude/
