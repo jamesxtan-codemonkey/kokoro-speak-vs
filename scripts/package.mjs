@@ -182,7 +182,9 @@ async function main() {
     // 6. Package. vsce resolves dependencies with `npm list` in the stage.
     const out = join(ROOT, `${pkg.name}-${target}-${pkg.version}.vsix`);
     const vsce = join(ROOT, "node_modules", "@vscode", "vsce", "vsce");
-    run(process.execPath, [vsce, "package", "--target", target, "--out", out, ...passthrough], {
+    // The repo is private, so package.json has no `repository` (its links would
+    // 404 on the Marketplace); tell vsce that's intentional instead of prompting.
+    run(process.execPath, [vsce, "package", "--target", target, "--out", out, "--allow-missing-repository", ...passthrough], {
       cwd: stage,
       shell: false,
     });
