@@ -6,10 +6,12 @@
 //                   the fallback when the backend is unavailable or fails.
 // No `vscode` import — pure logic, unit-testable in Node.
 
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, ChildProcess, SpawnOptions } from "child_process";
 import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from "fs";
 import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
+
+const IS_WIN = process.platform === "win32";
 
 export type NormMode = "off" | "deterministic" | "ai";
 export type Backend = "auto" | "cli" | "api";
@@ -259,7 +261,7 @@ function cacheSet(k: string, v: string) {
  * locations rather than relying on bare-name spawn. Returns null if not found.
  */
 function resolveCli(name: string): string | null {
-  if (name.includes("/")) {
+  if (name.includes("/") || (IS_WIN && name.includes("\\"))) {
     try {
       accessSync(name, constants.X_OK);
       return name;
@@ -267,41 +269,93 @@ function resolveCli(name: string): string | null {
       return null;
     }
   }
-  // Common install locations (covers npm-global, homebrew, local bins).
-  if (process.platform !== "win32") {
-    const home = homedir();
-    for (const c of [
-      join(home, ".local", "bin", name),
-      `/usr/local/bin/${name}`,
-      `/opt/homebrew/bin/${name}`,
-      join(home, ".bun", "bin", name),
-      join(home, ".npm-global", "bin", name),
-      join(home, ".claude", "local", name),
-    ]) {
-      try {
-        accessSync(c, constants.X_OK);
-        return c;
-      } catch {
-        /* keep looking */
-      }
+  // Common install locations (covers npm-global, homebrew, local bins). On
+  // Windows only .exe and .cmd shims are runnable — npm also writes an
+  // extensionless sh script next to the .cmd, which spawn can't execute.
+  const home = homedir();
+  const candidates = IS_WIN
+    ? [
+        join(home, ".local", "bin"), // Claude Code native installer
+        join(process.env.APPDATA ?? join(home, "AppData", "Roaming"), "npm"),
+        join(home, ".bun", "bin"),
+        join(home, ".claude", "local"),
+      ].flatMap((dir) => [join(dir, `${name}.exe`), join(dir, `${name}.cmd`)])
+    : [
+        join(home, ".local", "bin", name),
+        `/usr/local/bin/${name}`,
+        `/opt/homebrew/bin/${name}`,
+        join(home, ".bun", "bin", name),
+        join(home, ".npm-global", "bin", name),
+        join(home, ".claude", "local", name),
+      ];
+  for (const c of candidates) {
+    try {
+      accessSync(c, constants.X_OK);
+      return c;
+    } catch {
+      /* keep looking */
     }
   }
   // Fall back to the login PATH via a shell. Pass the name as a positional arg
   // ($1) with a fixed script — never interpolate it into the shell string, or a
   // malicious `command` setting could inject shell commands.
   try {
-    const probe =
-      process.platform === "win32"
-        ? spawnSync("where", [name], { encoding: "utf8" })
-        : spawnSync("/bin/sh", ["-lc", 'command -v "$1"', "sh", name], {
-            encoding: "utf8",
-          });
-    const line = (probe.stdout || "").split("\n")[0].trim();
+    const probe = IS_WIN
+      ? spawnSync("where", [name], { encoding: "utf8" })
+      : spawnSync("/bin/sh", ["-lc", 'command -v "$1"', "sh", name], {
+          encoding: "utf8",
+        });
+    const lines = (probe.stdout || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    // `where` lists every PATH match, extensionless shims first; take the first
+    // .exe, else the first .cmd/.bat.
+    const line = IS_WIN
+      ? lines.find((l) => /\.exe$/i.test(l)) ?? lines.find((l) => /\.(cmd|bat)$/i.test(l))
+      : lines[0];
     if (probe.status === 0 && line) return line;
   } catch {
     /* ignore */
   }
   return null;
+}
+
+/** CLI name without directory or Windows extension, e.g. "codex". */
+function cliName(cmd: string): string {
+  return basename(cmd).replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
+}
+
+/**
+ * spawn() that also runs Windows .cmd/.bat shims (how npm installs claude and
+ * codex). Node refuses to spawn those without a shell (CVE-2024-27980), so run
+ * them through cmd.exe with every argument quoted by us. Arguments here are
+ * fixed flags and a temp path — the prompt itself goes over stdin.
+ */
+function spawnCli(cmd: string, args: string[], opts: SpawnOptions): ChildProcess {
+  if (IS_WIN && /\.(cmd|bat)$/i.test(cmd)) {
+    const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    return spawn([cmd, ...args].map(quote).join(" "), {
+      ...opts,
+      shell: true,
+      windowsVerbatimArguments: true,
+    });
+  }
+  return spawn(cmd, args, opts);
+}
+
+/** Kill a CLI and its children. On Windows a .cmd shim runs under cmd.exe, and
+ *  killing that leaves the real (node) process running, so kill the tree. */
+function killTree(proc: ChildProcess) {
+  try {
+    if (IS_WIN && proc.pid) {
+      spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      proc.kill("SIGKILL");
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Resolve which concrete backend to use, or null if none is available. */
@@ -331,11 +385,11 @@ function runCli(
   const dir = mkdtempSync(join(tmpdir(), "kokoro-norm-"));
 
   return new Promise((resolve) => {
-    let proc;
+    let proc: ChildProcess;
     let outFile: string | undefined;
-    if (cmd === "codex" || cmd.endsWith("/codex")) {
+    if (cliName(cmd) === "codex") {
       outFile = join(dir, "out.txt");
-      proc = spawn(
+      proc = spawnCli(
         cmd,
         [
           "exec",
@@ -353,7 +407,7 @@ function runCli(
       );
     } else {
       // claude (and claude-compatible): print mode, JSON output, no tools.
-      proc = spawn(cmd, ["-p", "--output-format", "json", "--allowed-tools", ""], {
+      proc = spawnCli(cmd, ["-p", "--output-format", "json", "--allowed-tools", ""], {
         stdio: ["pipe", "pipe", "ignore"],
         cwd: dir,
       });
@@ -363,11 +417,7 @@ function runCli(
     if (proc.stdout) proc.stdout.on("data", (d) => (stdout += d));
 
     const timer = setTimeout(() => {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
+      killTree(proc);
       cleanup();
       resolve(null);
     }, timeoutMs);

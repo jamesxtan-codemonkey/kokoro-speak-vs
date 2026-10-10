@@ -1,13 +1,14 @@
 // Tests for chunkText — the splitter that keeps each Kokoro generation under the
 // model's ~512-token cap (over-long generations get truncated, dropping the
-// tail). Pure function; bundled to test/.synth.cjs.
+// tail) — and for backend planning, tokenization and voice-row selection. Pure functions;
+// bundled to test/.synth.cjs.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { chunkText } = require("./.synth.cjs");
+const { chunkText, planBackends, gpuDevice, tokenize, styleRow } = require("./.synth.cjs");
 
 // The exact text from the bug report (a clause was dropped because Kokoro's own
 // splitter merged 4 sentences into one over-long, truncated generation).
@@ -57,4 +58,54 @@ test("chunkText word-packs an over-long single sentence", () => {
 test("chunkText handles empty/whitespace input", () => {
   assert.deepEqual(chunkText(""), []);
   assert.deepEqual(chunkText("   \n  "), []);
+});
+
+test("gpuDevice: DirectML on Windows, none elsewhere", () => {
+  assert.equal(gpuDevice("win32"), "dml");
+  assert.equal(gpuDevice("darwin"), undefined);
+  assert.equal(gpuDevice("linux"), undefined);
+});
+
+test("planBackends: Windows auto tries the DirectML vocoder first, then CPU", () => {
+  assert.deepEqual(planBackends({ device: "auto" }, "win32"), [{ device: "dml" }, { device: "cpu" }]);
+});
+
+test("planBackends: device cpu skips the GPU", () => {
+  assert.deepEqual(planBackends({ device: "cpu" }, "win32"), [{ device: "cpu" }]);
+});
+
+test("planBackends: macOS auto is CPU, and that is not a fallback", () => {
+  const plan = planBackends({ device: "auto" }, "darwin");
+  assert.deepEqual(plan, [{ device: "cpu" }]);
+});
+
+test("planBackends: device gpu without a GPU backend explains the CPU fallback", () => {
+  const plan = planBackends({ device: "gpu" }, "linux");
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].device, "cpu");
+  assert.match(plan[0].fallbackReason, /no GPU backend on linux/);
+});
+
+// Official kokoro: input_ids = [0, *(vocab[p] for p in phonemes if p in vocab), 0]
+const VOCAB = { a: 43, b: 44, " ": 16, "ˈ": 156, "ɪ": 102 };
+
+test("tokenize: official mapping — vocab chars only, framed by pad 0", () => {
+  assert.deepEqual(tokenize("ab ˈɪ", VOCAB), [0, 43, 44, 16, 156, 102, 0]);
+  assert.deepEqual(tokenize("a?b", VOCAB), [0, 43, 44, 0], "unknown symbols are dropped");
+  assert.deepEqual(tokenize("", VOCAB), [0, 0]);
+});
+
+test("tokenize: caps at the model's 510-phoneme context", () => {
+  const ids = tokenize("a".repeat(600), VOCAB);
+  assert.equal(ids.length, 512);
+  assert.equal(ids[0], 0);
+  assert.equal(ids[511], 0);
+});
+
+test("styleRow: official voice row is len(phonemes) - 1 (kokoro-js uses + 1)", () => {
+  // 104 input ids = 102 phonemes + 2 pads -> row 101
+  assert.equal(styleRow(104), 101);
+  assert.equal(styleRow(3), 0); // one phoneme
+  assert.equal(styleRow(2), 0); // clamp
+  assert.equal(styleRow(600), 509); // clamp to the voice pack's 510 rows
 });

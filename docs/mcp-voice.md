@@ -21,11 +21,13 @@ Code. It keeps the Kokoro model **warm** across calls for low latency.
 
 ```bash
 npm install
+npm run prepare-model    # once: official weights → models/kokoro-speak
 npm run build:mcp        # → dist/mcp.js (executable, runs with node)
 ```
 
 The absolute path you'll register is `<repo>/dist/mcp.js`, e.g.
-`/Users/you/code/kokoro-speak-vs/dist/mcp.js`.
+`/Users/you/code/kokoro-speak-vs/dist/mcp.js` (Windows: `C:\code\kokoro-speak-vs\dist\mcp.js` —
+use forward slashes or escaped backslashes inside JSON/TOML strings).
 
 ## Register it
 
@@ -68,10 +70,16 @@ paste its guidance into your prompt/instructions.
 ## Notes & limits
 
 - **Local audio only.** The server plays on whatever machine it runs on, so it's
-  for local agents (Claude Code / Codex on your Mac). A cloud agent has no
+  for local agents (Claude Code / Codex on your machine). A cloud agent has no
   speakers.
-- **macOS** uses native PCM streaming (audify → CoreAudio): exact pause-free
+- **macOS and Windows** use native PCM streaming (audify → CoreAudio / WASAPI): exact pause-free
   playback, instant interrupt. Other platforms fall back to the OS CLI player.
+- **Model:** the server uses `<repo>/models/kokoro-speak` — the official Kokoro
+  weights converted by `npm run prepare-model` (the same files the VSIX
+  bundles). It never downloads anything.
+- **GPU:** on Windows the vocoder runs on the GPU via DirectML (same `auto`
+  logic as the extension, falling back to the CPU). Override with the env var
+  `KOKORO_SPEAK_DEVICE` = `auto` | `gpu` | `cpu` in the server registration.
 - `speak` **blocks until the audio finishes** — keep spoken text short; don't
   queue many long calls. Call `speak` again to interrupt.
 - stdout is the MCP JSON-RPC channel; the server routes all library logging to

@@ -1,7 +1,14 @@
 import * as vscode from "vscode";
 import { getSpeakableText } from "./textprep";
 import { AudioPlayer, AudioCallbacks, createPlayer } from "./pcmplayer";
-import { loadModel, synthesize } from "./synth";
+import {
+  loadModel,
+  synthesize,
+  configureModel,
+  currentBackend,
+  describeBackend,
+  DevicePref,
+} from "./synth";
 import { VOICES, isVoice } from "./voices";
 import {
   normalize,
@@ -42,14 +49,35 @@ type Phase =
 let status: vscode.StatusBarItem;
 let player: AudioPlayer | undefined;
 let currentPhase: Phase = "idle";
-let modelReady = false;
+// GPU-fallback reasons already shown this session, so each warns once, not on
+// every Speak.
+const shownNotices = new Set<string>();
 let extContext: vscode.ExtensionContext;
 // Request id so segments from a superseded/stopped request are ignored.
 let reqSeq = 0;
 let activeReq = 0;
 
+/**
+ * Packaged VSIXs are platform-specific (native onnxruntime/audify inside), and
+ * VS Code will install one built for another platform without complaint — it
+ * then fails deep inside onnxruntime. Name the problem and the right file.
+ */
+function platformMismatch(context: vscode.ExtensionContext): string | undefined {
+  const builtFor: string | undefined = context.extension.packageJSON?.kokoroSpeakTarget;
+  const host = `${process.platform}-${process.arch}`;
+  if (!builtFor || builtFor === host) return undefined;
+  const version = context.extension.packageJSON?.version ?? "<version>";
+  return (
+    `Kokoro Speak: this package was built for ${builtFor}, but VS Code is running on ${host}. ` +
+    `Uninstall it and install kokoro-speak-vs-${host}-${version}.vsix instead.`
+  );
+}
+let wrongPlatform: string | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
   extContext = context;
+  wrongPlatform = platformMismatch(context);
+  if (wrongPlatform) vscode.window.showErrorMessage(wrongPlatform);
   status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100
@@ -57,6 +85,13 @@ export function activate(context: vscode.ExtensionContext) {
   status.command = "kokoroSpeak.statusClick";
   setStatus("idle");
   context.subscriptions.push(status);
+
+  applyModelPrefs();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("kokoroSpeak.device")) applyModelPrefs();
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("kokoroSpeak.speakSelection", () => {
@@ -144,6 +179,25 @@ async function resolveAiConsent(): Promise<boolean> {
   return ok;
 }
 
+/** Push the device setting to the synth. A change drops the loaded
+ *  model, so the next Speak shows "Loading model…" while it reloads. */
+function applyModelPrefs() {
+  const cfg = vscode.workspace.getConfiguration("kokoroSpeak");
+  const before = currentBackend();
+  configureModel({ device: cfg.get<DevicePref>("device", "auto") });
+  if (currentBackend() !== before && currentPhase === "idle") setStatus("idle");
+}
+
+/** Say (once per reason) when the GPU was wanted but the vocoder is on the CPU. */
+function afterLoadNotices() {
+  const b = currentBackend();
+  if (!b?.fallbackReason || shownNotices.has(b.fallbackReason)) return;
+  shownNotices.add(b.fallbackReason);
+  vscode.window.showWarningMessage(
+    `Kokoro Speak: GPU unavailable, using the ${describeBackend(b)} (${b.fallbackReason}).`
+  );
+}
+
 export function deactivate() {
   activeReq = ++reqSeq;
   player?.stop();
@@ -157,6 +211,10 @@ function noSource() {
 }
 
 function speak(text: string | undefined, what: string) {
+  if (wrongPlatform) {
+    vscode.window.showErrorMessage(wrongPlatform);
+    return;
+  }
   const trimmed = text?.trim();
   if (!trimmed) {
     vscode.window.showInformationMessage("Kokoro Speak: nothing to speak.");
@@ -178,7 +236,8 @@ function speak(text: string | undefined, what: string) {
       if (cancelled()) return;
       setStatus("error");
       vscode.window.showErrorMessage(
-        "Kokoro Speak: no audio player found. Install one " +
+        "Kokoro Speak: no audio output found. Check that an output device " +
+          "is enabled (Windows: Sound settings), or install a player " +
           "(macOS: afplay built-in; Linux: paplay/aplay/ffplay)."
       );
     },
@@ -202,13 +261,11 @@ function speak(text: string | undefined, what: string) {
         setStatus("idle");
         return;
       }
-      if (!modelReady) {
+      if (!currentBackend()) {
         setStatus("loading", "Loading model…");
-        await loadModel((pct) =>
-          setStatus("loading", `Downloading model: ${pct}%`)
-        );
-        modelReady = true;
+        await loadModel();
         if (cancelled()) return;
+        afterLoadNotices();
       }
       setStatus("synthesizing", `Synthesizing ${what}…`);
       await synthesize(
@@ -228,6 +285,7 @@ function speak(text: string | undefined, what: string) {
         }
       );
       if (!cancelled()) sp.end();
+      afterLoadNotices(); // the GPU can also fail mid-run (CPU took over)
     } catch (err: any) {
       if (cancelled()) return;
       setStatus("error");
@@ -570,7 +628,10 @@ function setStatus(phase: Phase, detail?: string) {
   const active = phase === "speaking" || phase === "paused";
   const tip = new vscode.MarkdownString(undefined, true);
   tip.isTrusted = true;
-  tip.appendMarkdown("**Kokoro TTS**\n\n");
+  tip.appendMarkdown("**Kokoro TTS**");
+  const engine = currentBackend();
+  if (engine) tip.appendMarkdown(` — _${describeBackend(engine)}_`);
+  tip.appendMarkdown("\n\n");
   // Primary hover action: speak whatever's on the clipboard (works from the
   // Claude Code panel, Markdown preview, anywhere — copy, then click).
   tip.appendMarkdown("[$(play) Speak clipboard](command:kokoroSpeak.speakClipboard)");
