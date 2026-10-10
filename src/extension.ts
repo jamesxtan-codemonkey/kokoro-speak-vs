@@ -32,11 +32,8 @@ const NORM_KEYS = [
   "timeoutMs",
 ].map((k) => "kokoroSpeak.normalization." + k);
 
-// Synthesis runs in the extension host (onnxruntime-node, ~3x realtime) and audio
-// plays through the OS player. No webview: no CSP, no autoplay gesture, no panel.
-
-const HELLO_TEXT =
-  "Hello from Kokoro Speak. This sentence is synthesized by the Kokoro 82 million parameter model, running in the extension host.";
+// Synthesis runs in the extension host (onnxruntime-node; see synth.ts) and audio
+// streams to the OS audio device. No webview: no CSP, no autoplay gesture, no panel.
 
 type Phase =
   | "idle"
@@ -134,10 +131,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("kokoroSpeak.selectVoice", selectVoice),
     vscode.commands.registerCommand("kokoroSpeak.setApiKey", setApiKey),
-    vscode.commands.registerCommand("kokoroSpeak.configure", configure),
-    vscode.commands.registerCommand("kokoroSpeak.speakHello", () =>
-      speak(HELLO_TEXT, "greeting")
-    )
+    vscode.commands.registerCommand("kokoroSpeak.configure", configure)
   );
 }
 
