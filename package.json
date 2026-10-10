@@ -1,7 +1,7 @@
 {
   "name": "kokoro-speak-vs",
   "displayName": "Kokoro Speak",
-  "description": "Read text aloud in any editor using the open-weight Kokoro 82M TTS model.",
+  "description": "Read text aloud in VS Code with the official Kokoro-82M voice: natural, fully offline, and GPU-accelerated on Windows.",
   "version": "0.0.8",
   "publisher": "JamesTan",
   "engines": {
@@ -9,6 +9,17 @@
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "text to speech",
+    "tts",
+    "read aloud",
+    "speech",
+    "voice",
+    "kokoro",
+    "offline",
+    "accessibility",
+    "markdown"
   ],
   "license": "MIT",
   "repository": {
