@@ -17,7 +17,7 @@ out.log
 .DS_Store
 .gstack/
 **/.gstack/
-# Bundled model (npm run fetch-model)
+# Converted Kokoro model (npm run prepare-model)
 models/
 
 # Model conversion virtualenv (scripts/prepare-model.mjs)
