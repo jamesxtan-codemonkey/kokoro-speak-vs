@@ -1,8 +1,17 @@
-// Host-side Kokoro synthesis (onnxruntime-node: CPU ~3-4x realtime, DirectML GPU
-// on Windows ~25x). Runs in the
-// extension host — no webview, no CSP, no autoplay. Streams sentences and emits
-// concatenated WAV segments. Kept free of `vscode` imports so it can be tested
-// in plain Node.
+// Host-side Kokoro synthesis. Runs in the extension host — no webview, no CSP,
+// no autoplay. Streams sentences and emits concatenated WAV segments. Kept free
+// of `vscode` imports so it can be tested in plain Node.
+//
+// The model is the official Kokoro-82M v1.0 (hexgrad), converted by
+// tools/convert/convert.py into two ONNX files bundled in models/kokoro-speak
+// (provenance + validation in its manifest.json):
+//   frontend.onnx  phoneme ids -> durations, pitch, features    fp32, always CPU
+//   decoder.onnx   features -> 24 kHz waveform (the vocoder)    fp16, GPU or CPU
+// The split exists for DirectML: its LSTM kernel re-plans for every new
+// sentence length (~1.8 s each), while the vocoder's convolutions are fast. So
+// the LSTMs (frontend, ~0.1 s on CPU) stay on the CPU and the vocoder goes to
+// the GPU: ~17x realtime end to end (vs ~4x on CPU), unquantized. kokoro-js is used only for its
+// phonemizer (text -> IPA) and its voice files (identical to the official ones).
 
 import * as fs from "fs";
 import * as path from "path";
@@ -15,90 +24,41 @@ const importKokoro: () => Promise<any> = new Function(
   "return import('kokoro-js')"
 ) as any;
 
-// Same trick for transformers.js (kokoro-js's runtime), whose `env` decides where
-// model files come from. Both resolve to the same module instance.
-const importTransformers: () => Promise<any> = new Function(
-  "return import('@huggingface/transformers')"
-) as any;
-
 let kokoroMod: any;
 async function kokoro(): Promise<any> {
   if (!kokoroMod) kokoroMod = await importKokoro();
   return kokoroMod;
 }
 
-const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+// onnxruntime-node is a native addon with a CommonJS entry; load it on first use.
+let ortMod: any;
+function ort(): any {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  if (!ortMod) ortMod = require("onnxruntime-node");
+  return ortMod;
+}
+
+// This file is bundled to dist/*.js (or test/*.cjs): the extension root is one
+// level up.
+export const MODEL_DIR = path.join(__dirname, "..", "models", "kokoro-speak");
+const VOICES_DIR = path.join(__dirname, "..", "node_modules", "kokoro-js", "voices");
+const SAMPLE_RATE = 24000;
+const MAX_PHONEMES = 510; // the model's 512-token context minus the 2 pad tokens
 const MAX_BUFFER_SEC = 600;
-
-// The packaged extension ships the q8 model in <extension>/models (see
-// scripts/fetch-model.mjs), so it works offline out of the box. This file is
-// bundled to dist/*.js (or test/*.cjs), so the models dir is one level up.
-const BUNDLED_MODELS_DIR = path.join(__dirname, "..", "models");
-
-/** ONNX file name suffix per precision (transformers.js convention). */
-const DTYPE_SUFFIX: Record<string, string> = { fp32: "", fp16: "_fp16", q8: "_quantized" };
-
-interface Storage {
-  /** Where on-demand downloads (e.g. fp32) are cached; default: transformers.js's. */
-  cacheDir?: string;
-  /** Never download — use only bundled/cached files. */
-  offline: boolean;
-}
-let storage: Storage = { offline: process.env.KOKORO_SPEAK_OFFLINE === "1" };
-let tfEnv: any;
-
-/** Set where downloaded model files are cached (the extension uses its global
- *  storage, so downloads survive extension updates) and/or force offline. */
-export function configureModelStorage(next: Partial<Storage>): void {
-  storage = { ...storage, ...next };
-  if (tfEnv) applyStorage(tfEnv);
-}
-
-function applyStorage(env: any) {
-  env.allowLocalModels = true;
-  env.localModelPath = BUNDLED_MODELS_DIR;
-  if (storage.cacheDir) env.cacheDir = storage.cacheDir;
-  env.allowRemoteModels = !storage.offline;
-}
-
-async function modelEnv(): Promise<any> {
-  if (!tfEnv) {
-    tfEnv = (await importTransformers()).env;
-    applyStorage(tfEnv);
-  }
-  return tfEnv;
-}
-
-/** True if this precision's weights are on disk (bundled or downloaded), i.e.
- *  loading it won't hit the network. */
-export function modelIsLocal(dtype: string): boolean {
-  const suffix = DTYPE_SUFFIX[dtype];
-  if (suffix === undefined) return false;
-  const rel = path.join(MODEL_ID, "onnx", `model${suffix}.onnx`);
-  const dirs = [BUNDLED_MODELS_DIR, storage.cacheDir ?? tfEnv?.cacheDir].filter(Boolean);
-  return dirs.some((d) => fs.existsSync(path.join(d as string, rel)));
-}
 
 /** "auto" = the platform GPU if there is one (DirectML on Windows), else CPU. */
 export type DevicePref = "auto" | "gpu" | "cpu";
-/** Model weights: "auto" picks per device (see resolvePrecision). */
-export type PrecisionPref = "auto" | "q8" | "fp16" | "fp32";
 
 export interface ModelPrefs {
   device: DevicePref;
-  precision: PrecisionPref;
 }
 
-/** The backend a loaded model actually runs on. */
+/** Where the vocoder runs (the frontend always runs on the CPU). */
 export interface Backend {
-  /** transformers.js device id: "dml" | "cpu". */
+  /** onnxruntime execution provider: "dml" | "cpu". */
   device: string;
-  dtype: string;
   /** Why we're not on the preferred GPU, if we fell back. */
   fallbackReason?: string;
-  /** A faster precision for this device that isn't on disk yet (download on
-   *  demand via upgradeModel()). */
-  upgrade?: string;
 }
 
 /** GPU execution provider this platform's onnxruntime-node ships, if any.
@@ -107,65 +67,70 @@ export function gpuDevice(platform: string = process.platform): string | undefin
   return platform === "win32" ? "dml" : undefined;
 }
 
-/**
- * Weights per device. Measured on Windows x64 (RTX 4090 / i7-10700, ORT 1.30):
- * - dml: q8 ≈ 28x realtime. fp32/fp16 drop to ≈ 6x — DirectML only keeps its
- *   fast path for the first input shape, and every sentence has a new length.
- * - cpu (x64): q8 ≈ 1.2x (too slow — playback outruns synthesis), fp32 ≈ 4x.
- * Elsewhere CPU keeps q8 (≈ 3x on Apple silicon, 1/4 the download).
- */
-export function resolvePrecision(
-  pref: PrecisionPref,
-  device: string,
-  platform: string = process.platform,
-  arch: string = process.arch
-): string {
-  if (pref !== "auto") return pref;
-  if (device === "cpu" && platform === "win32" && arch === "x64") return "fp32";
-  return "q8";
-}
-
-/**
- * Ordered backends to try: the GPU first (if wanted and present), then CPU.
- * With auto precision, a preferred precision that isn't on disk is swapped for
- * the bundled q8 (so it works offline) and offered as an `upgrade` instead.
- */
-export function planBackends(
-  prefs: ModelPrefs,
-  platform: string = process.platform,
-  arch: string = process.arch,
-  isLocal: (dtype: string) => boolean = modelIsLocal
-): Backend[] {
-  const pick = (device: string): Backend => {
-    const dtype = resolvePrecision(prefs.precision, device, platform, arch);
-    return prefs.precision === "auto" && dtype !== "q8" && !isLocal(dtype)
-      ? { device, dtype: "q8", upgrade: dtype }
-      : { device, dtype };
-  };
+/** Ordered backends to try for the vocoder: the GPU first (if wanted and
+ *  present), then CPU. */
+export function planBackends(prefs: ModelPrefs, platform: string = process.platform): Backend[] {
   const plan: Backend[] = [];
   const gpu = gpuDevice(platform);
-  if (prefs.device !== "cpu" && gpu) plan.push(pick(gpu));
-  const cpu = pick("cpu");
-  if (prefs.device === "gpu" && !gpu) {
-    cpu.fallbackReason = `no GPU backend on ${platform}`;
-  }
+  if (prefs.device !== "cpu" && gpu) plan.push({ device: gpu });
+  const cpu: Backend = { device: "cpu" };
+  if (prefs.device === "gpu" && !gpu) cpu.fallbackReason = `no GPU backend on ${platform}`;
   plan.push(cpu);
   return plan;
 }
 
-interface Loaded {
-  tts: any;
-  backend: Backend;
+export function describeBackend(b: Backend): string {
+  return b.device === "dml" ? "GPU (DirectML)" : b.device === "cpu" ? "CPU" : b.device;
 }
 
-let prefs: ModelPrefs = { device: "auto", precision: "auto" };
-let loadedPromise: Promise<Loaded> | undefined;
+/** Official tokenization (kokoro KModel.forward): each phoneme character in the
+ *  vocab becomes its id, others are dropped, framed by the pad token 0. */
+export function tokenize(phonemes: string, vocab: Record<string, number>): number[] {
+  const ids: number[] = [];
+  for (const ch of phonemes) {
+    const id = vocab[ch];
+    if (id !== undefined) ids.push(id);
+  }
+  return [0, ...ids.slice(0, MAX_PHONEMES), 0];
+}
+
+/** Voice-pack row for a sequence, as the official pipeline picks it:
+ *  KPipeline uses voice[len(phonemes) - 1], and input_ids are the phonemes plus
+ *  two pad tokens. (kokoro-js uses the next row up.) */
+export function styleRow(numInputIds: number): number {
+  return Math.min(Math.max(numInputIds - 3, 0), 509);
+}
+
+const voiceCache = new Map<string, Float32Array>();
+function voiceStyle(voice: string, numInputIds: number): Float32Array {
+  let pack = voiceCache.get(voice);
+  if (!pack) {
+    const buf = fs.readFileSync(path.join(VOICES_DIR, `${voice}.bin`));
+    pack = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    voiceCache.set(voice, pack);
+  }
+  const row = styleRow(numInputIds) * 256;
+  return pack.slice(row, row + 256);
+}
+
+/** A loaded model: CPU frontend + vocoder on `backend`. `tts` is a kokoro-js
+ *  KokoroTTS shell whose generate() phonemizes and then calls our model. */
+interface Engine {
+  frontend: any;
+  decoder: any;
+  vocab: Record<string, number>;
+  backend: Backend;
+  tts: { generate(text: string, o: { voice: string; speed: number }): Promise<{ audio: Float32Array; sampling_rate: number }> };
+}
+
+let prefs: ModelPrefs = { device: "auto" };
+let loadedPromise: Promise<Engine> | undefined;
 let backend: Backend | undefined;
 
-/** Set device/precision. A change drops the loaded model; the next
- *  loadModel() reloads it on the new backend. */
+/** Set the device. A change drops the loaded model; the next loadModel()
+ *  reloads it on the new backend. */
 export function configureModel(next: ModelPrefs): void {
-  if (next.device === prefs.device && next.precision === prefs.precision) return;
+  if (next.device === prefs.device) return;
   prefs = { ...next };
   loadedPromise = undefined;
   backend = undefined;
@@ -176,44 +141,64 @@ export function currentBackend(): Backend | undefined {
   return backend;
 }
 
-export function describeBackend(b: Backend): string {
-  const where = b.device === "dml" ? "GPU (DirectML)" : b.device === "cpu" ? "CPU" : b.device;
-  return `${where}, ${b.dtype}`;
-}
-
 function errText(e: unknown): string {
   return String((e as any)?.message ?? e).split("\n")[0].slice(0, 200);
 }
 
-async function loadOn(b: Backend, onProgress?: (pct: number) => void): Promise<any> {
-  await modelEnv();
-  const m = await kokoro();
-  const tts = await m.KokoroTTS.from_pretrained(MODEL_ID, {
-    dtype: b.dtype,
-    device: b.device,
-    progress_callback: (p: any) => {
-      if (p?.status === "progress" && typeof p.progress === "number") {
-        onProgress?.(Math.round(p.progress));
-      }
-    },
+function session(file: string, device: string): Promise<any> {
+  return ort().InferenceSession.create(path.join(MODEL_DIR, file), {
+    executionProviders: [device],
+    logSeverityLevel: 3, // errors only (DirectML logs node-placement warnings)
   });
-  // A GPU can accept the model at load and still reject an op at run time
-  // (e.g. DirectML on older onnxruntime fails Kokoro's ConvTranspose), so prove
-  // it with one short line. This also compiles the GPU kernels up front.
-  if (b.device !== "cpu") await tts.generate("Ready.", { voice: "af_heart" });
-  return tts;
 }
 
-async function loadWithFallback(
-  plan: Backend[],
-  onProgress?: (pct: number) => void
-): Promise<Loaded> {
+async function infer(e: Engine, ids: number[], voice: string, speed: number): Promise<Float32Array> {
+  const O = ort();
+  const style = new O.Tensor("float32", voiceStyle(voice, ids.length), [1, 256]);
+  const f = await e.frontend.run({
+    input_ids: new O.Tensor("int64", BigInt64Array.from(ids, (v) => BigInt(v)), [1, ids.length]),
+    style,
+    speed: new O.Tensor("float32", Float32Array.of(speed), [1]),
+  });
+  const d = await e.decoder.run({ asr: f.asr, F0_pred: f.F0_pred, N_pred: f.N_pred, style });
+  return d.waveform.data as Float32Array;
+}
+
+/** Load the model with the vocoder on `b`, reusing an existing frontend. */
+async function loadOn(b: Backend, reuse?: Engine): Promise<Engine> {
+  if (!fs.existsSync(path.join(MODEL_DIR, "decoder.onnx"))) {
+    throw new Error(
+      `Kokoro model not found in ${MODEL_DIR}. Run \`npm run prepare-model\` ` +
+        "(converts the official weights; packaged builds include it)."
+    );
+  }
+  const vocab: Record<string, number> =
+    reuse?.vocab ?? JSON.parse(fs.readFileSync(path.join(MODEL_DIR, "config.json"), "utf8")).vocab;
+  const frontend = reuse?.frontend ?? (await session("frontend.onnx", "cpu"));
+  const decoder = await session("decoder.onnx", b.device);
+  const e = { frontend, decoder, vocab, backend: b } as Engine;
+  // kokoro-js does text normalization + espeak phonemization in generate(),
+  // then hands its tokenizer's output to generate_from_ids(). Swap in the
+  // official tokenizer / style row / our two-part model at those two seams.
+  const { KokoroTTS } = await kokoro();
+  const tts = new KokoroTTS(null, (phonemes: string) => ({ input_ids: tokenize(phonemes, vocab) }));
+  tts.generate_from_ids = async (ids: number[], o: { voice: string; speed: number }) => ({
+    audio: await infer(e, ids, o.voice, o.speed ?? 1),
+    sampling_rate: SAMPLE_RATE,
+  });
+  e.tts = tts;
+  // A GPU can accept the model and still fail at run time (driver, unsupported
+  // op), so prove it with one short line. This also warms its kernels up.
+  if (b.device !== "cpu") await tts.generate("Ready.", { voice: "af_heart", speed: 1 });
+  return e;
+}
+
+async function loadWithFallback(plan: Backend[], reuse?: Engine): Promise<Engine> {
   let lastErr: unknown;
   let reason: string | undefined;
   for (const b of plan) {
     try {
-      const tts = await loadOn(b, onProgress);
-      return { tts, backend: { ...b, fallbackReason: b.fallbackReason ?? reason } };
+      return await loadOn({ ...b, fallbackReason: b.fallbackReason ?? reason }, reuse);
     } catch (e) {
       lastErr = e;
       reason = `${b.device} failed: ${errText(e)}`;
@@ -225,7 +210,7 @@ async function loadWithFallback(
 
 /** Install `p` as the current load. Publishes its backend once loaded, unless a
  *  newer load replaced it; a failure isn't cached, so the next call retries. */
-function track(p: Promise<Loaded>): Promise<Loaded> {
+function track(p: Promise<Engine>): Promise<Engine> {
   loadedPromise = p;
   p.then(
     (l) => {
@@ -238,44 +223,20 @@ function track(p: Promise<Loaded>): Promise<Loaded> {
   return p;
 }
 
-function load(onProgress?: (pct: number) => void): Promise<Loaded> {
-  return (
-    loadedPromise ??
-    track(
-      // Plan after the env is set up: planning checks which weights are on disk.
-      modelEnv().then(() => loadWithFallback(planBackends(prefs), onProgress))
-    )
-  );
+function load(): Promise<Engine> {
+  return loadedPromise ?? track(loadWithFallback(planBackends(prefs)));
 }
 
-export function loadModel(onProgress?: (pct: number) => void): Promise<any> {
-  return load(onProgress).then((l) => l.tts);
+/** Load (or reuse) the model. Resolves once it can synthesize. */
+export function loadModel(): Promise<unknown> {
+  return load();
 }
 
-/** Download (if needed) and switch to the current backend's suggested faster
- *  precision. Resolves to the new backend; throws (staying on the current
- *  model) if the download or load fails. */
-export async function upgradeModel(onProgress?: (pct: number) => void): Promise<Backend> {
-  const cur = (await load()).backend;
-  if (!cur.upgrade) return cur;
-  const next: Backend = { device: cur.device, dtype: cur.upgrade, fallbackReason: cur.fallbackReason };
-  const prev = loadedPromise;
-  const p = loadWithFallback([next], onProgress);
-  const loaded = await p; // on failure the current model stays loaded
-  // Adopt it unless the settings changed (and dropped the model) meanwhile.
-  if (loadedPromise === prev) {
-    loadedPromise = p;
-    backend = loaded.backend;
-  }
-  return loaded.backend;
-}
-
-/** The GPU failed mid-run (e.g. device lost after sleep): reload on CPU. */
-function fallBackToCpu(failed: Backend, err: unknown): Promise<Loaded> {
-  const cpu = planBackends(prefs).find((b) => b.device === "cpu")!;
-  cpu.fallbackReason = `${failed.device} failed: ${errText(err)}`;
-  console.warn(`[kokoro-speak] ${cpu.fallbackReason}; switching to CPU`);
-  return track(loadWithFallback([cpu]));
+/** The GPU failed mid-run (e.g. device lost after sleep): vocoder -> CPU. */
+function fallBackToCpu(failed: Engine, err: unknown): Promise<Engine> {
+  const reason = `${failed.backend.device} failed: ${errText(err)}`;
+  console.warn(`[kokoro-speak] ${reason}; switching to CPU`);
+  return track(loadWithFallback([{ device: "cpu", fallbackReason: reason }], failed));
 }
 
 /** Encode mono Float32 samples as a 16-bit PCM WAV Buffer. */
@@ -383,11 +344,11 @@ export async function synthesize(
 
   const generate = async (chunk: string) => {
     try {
-      return await loaded.tts.generate(chunk, { voice: voice as any, speed });
+      return await loaded.tts.generate(chunk, { voice, speed });
     } catch (e) {
       if (loaded.backend.device === "cpu") throw e;
-      loaded = await fallBackToCpu(loaded.backend, e);
-      return loaded.tts.generate(chunk, { voice: voice as any, speed });
+      loaded = await fallBackToCpu(loaded, e);
+      return loaded.tts.generate(chunk, { voice, speed });
     }
   };
 

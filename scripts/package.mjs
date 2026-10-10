@@ -12,14 +12,15 @@
 //   - sharp: replace with a stub — transformers.js imports it at load (and
 //     throws if it's missing) but only calls it for images, and its native
 //     libvips is per-platform and ~20 MB.
-// then run vsce there. The bundled model comes from scripts/fetch-model.mjs.
+// then run vsce there. The bundled model (official Kokoro-82M weights converted
+// to ONNX, see tools/convert) comes from scripts/prepare-model.mjs.
 
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchModel } from "./fetch-model.mjs";
+import { prepareModel } from "./prepare-model.mjs";
 import { untarGz } from "./lib/archive.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -102,12 +103,12 @@ async function main() {
 
   // 1. Build the extension bundle and make sure the model is present + verified.
   run("npm", ["run", "vscode:prepublish"], { cwd: ROOT });
-  await fetchModel({ log: (m) => console.log(m) });
+  await prepareModel({ log: (m) => console.log(m) });
 
   // 2. Stage the extension files.
   const stage = mkdtempSync(join(tmpdir(), `kokoro-speak-pkg-${target}-`));
   try {
-    for (const f of ["README.md", "LICENSE", ".vscodeignore", "dist/extension.js", "docs", "skills", "models"]) {
+    for (const f of ["README.md", "LICENSE", ".vscodeignore", "dist/extension.js", "docs", "skills", "models/kokoro-speak"]) {
       if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(stage, f), { recursive: true });
     }
     // Already built above; the stage has no sources or dev tools to rebuild with.

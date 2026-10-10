@@ -6,7 +6,8 @@
 // binaries exist for the target and are the right format/CPU (PE x64 /
 // Mach-O arm64 / ELF), no other platform's binaries, sharp stubbed.
 // When the VSIX targets this machine: extracts it and synthesizes speech from
-// the extracted copy with downloads disabled (KOKORO_SPEAK_OFFLINE=1) — under
+// the extracted copy with networking disabled in-process (fetch/http/https/net
+// throw) — under
 // Node and, if found, VS Code's own runtime (Electron) — and loads audify.
 // --install: also installs it into a throwaway VS Code profile via the `code`
 // CLI (proves VS Code accepts the package; your real setup is untouched).
@@ -17,7 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MODEL_FILES, MODEL_ID } from "./fetch-model.mjs";
+import { MODEL_FILES } from "./prepare-model.mjs";
 import { readZip } from "./lib/archive.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,11 +75,19 @@ console.log("\nstructure:");
 check(has("package.json") && has("dist/extension.js"), "extension manifest + bundle");
 const builtFor = has("package.json") && JSON.parse(zip.get(E + "package.json").read()).kokoroSpeakTarget;
 check(builtFor === target, `package.json kokoroSpeakTarget = ${builtFor} (wrong-platform install guard)`);
-for (const f of MODEL_FILES) {
-  const e = zip.get(`${E}models/${MODEL_ID}/${f.path}`);
-  const sha = e && createHash("sha256").update(e.read()).digest("hex");
-  check(sha === f.sha256, `bundled model ${f.path} (${e ? (e.size / 1e6).toFixed(1) + " MB" : "missing"}) sha256`);
+const MODEL = "models/kokoro-speak";
+for (const f of MODEL_FILES) check(has(`${MODEL}/${f}`), `model file ${f}`);
+const manifestEntry = zip.get(`${E}${MODEL}/manifest.json`);
+if (manifestEntry) {
+  const mf = JSON.parse(manifestEntry.read());
+  console.log(`        model: ${mf.model}; source ${mf.source.repo}@${mf.source.revision.slice(0, 7)}`);
+  for (const [f, info] of Object.entries(mf.files)) {
+    const e = zip.get(`${E}${MODEL}/${f}`);
+    const sha = e && createHash("sha256").update(e.read()).digest("hex");
+    check(sha === info.sha256, `${f} (${e ? (e.size / 1e6).toFixed(1) + " MB" : "missing"}) matches manifest sha256`);
+  }
 }
+check(![...zip.keys()].some((k) => k.includes("onnx-community")), "no third-party (onnx-community) model files");
 const voices = [...zip.keys()].filter((k) => k.startsWith(E + "node_modules/kokoro-js/voices/"));
 check(voices.length >= 28, `kokoro voices bundled (${voices.length})`);
 
@@ -126,14 +135,19 @@ if (target !== host) {
     const esbuild = spawnSync(
       process.execPath,
       [join(ROOT, "node_modules", "esbuild", "bin", "esbuild"), join(ROOT, "src", "synth.ts"),
-        "--bundle", "--platform=node", "--format=cjs", `--outfile=${smokeSynth}`],
+        "--bundle", "--platform=node", "--format=cjs", "--external:onnxruntime-node", `--outfile=${smokeSynth}`],
       { encoding: "utf8" }
     );
     check(esbuild.status === 0, "build smoke synth" + (esbuild.status ? `: ${esbuild.stderr}` : ""));
     const smoke = join(dir, "dist", "smoke.cjs");
     writeFileSync(
       smoke,
-      `const S = require("./smoke-synth.cjs");
+      `// No network: any attempt to reach it throws, failing the smoke test.
+const offline = () => { throw new Error("network access attempted"); };
+globalThis.fetch = offline;
+for (const m of ["http", "https"]) { const mod = require(m); mod.request = offline; mod.get = offline; }
+const net = require("net"); net.connect = offline; net.createConnection = offline;
+const S = require("./smoke-synth.cjs");
 (async () => {
   const t0 = Date.now();
   await S.loadModel();
@@ -156,7 +170,7 @@ if (target !== host) {
       const r = spawnSync(exe, [smoke], {
         cwd: dir,
         encoding: "utf8",
-        env: { ...process.env, ...env, KOKORO_SPEAK_OFFLINE: "1" },
+        env: { ...process.env, ...env },
         timeout: 300000,
       });
       const line = (r.stdout || "").split(/\r?\n/).find((l) => l.startsWith("{"));

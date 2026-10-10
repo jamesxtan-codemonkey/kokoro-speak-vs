@@ -19,3 +19,6 @@ out.log
 **/.gstack/
 # Bundled model (npm run fetch-model)
 models/
+
+# Model conversion virtualenv (scripts/prepare-model.mjs)
+.venv-convert/

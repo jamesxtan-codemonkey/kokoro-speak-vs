@@ -1,6 +1,6 @@
 // Tests for chunkText — the splitter that keeps each Kokoro generation under the
 // model's ~512-token cap (over-long generations get truncated, dropping the
-// tail) — and for backend planning (GPU/CPU, weight precision). Pure functions;
+// tail) — and for backend planning, tokenization and voice-row selection. Pure functions;
 // bundled to test/.synth.cjs.
 
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { chunkText, planBackends, resolvePrecision, gpuDevice } = require("./.synth.cjs");
+const { chunkText, planBackends, gpuDevice, tokenize, styleRow } = require("./.synth.cjs");
 
 // The exact text from the bug report (a clause was dropped because Kokoro's own
 // splitter merged 4 sentences into one over-long, truncated generation).
@@ -60,65 +60,52 @@ test("chunkText handles empty/whitespace input", () => {
   assert.deepEqual(chunkText("   \n  "), []);
 });
 
-// Which precisions are "on disk": the packaged VSIX bundles only q8.
-const ALL_LOCAL = () => true;
-const ONLY_Q8 = (dtype) => dtype === "q8";
-
 test("gpuDevice: DirectML on Windows, none elsewhere", () => {
   assert.equal(gpuDevice("win32"), "dml");
   assert.equal(gpuDevice("darwin"), undefined);
   assert.equal(gpuDevice("linux"), undefined);
 });
 
-test("resolvePrecision auto: q8 on GPU, fp32 on Windows x64 CPU, q8 on other CPUs", () => {
-  assert.equal(resolvePrecision("auto", "dml", "win32", "x64"), "q8");
-  assert.equal(resolvePrecision("auto", "cpu", "win32", "x64"), "fp32");
-  assert.equal(resolvePrecision("auto", "cpu", "win32", "arm64"), "q8");
-  assert.equal(resolvePrecision("auto", "cpu", "darwin", "arm64"), "q8");
-  assert.equal(resolvePrecision("auto", "cpu", "linux", "x64"), "q8");
-  // explicit precision always wins
-  assert.equal(resolvePrecision("fp16", "dml", "win32", "x64"), "fp16");
-  assert.equal(resolvePrecision("q8", "cpu", "win32", "x64"), "q8");
-});
-
-test("planBackends: Windows auto tries DirectML first, then CPU", () => {
-  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64", ALL_LOCAL);
-  assert.deepEqual(plan, [
-    { device: "dml", dtype: "q8" },
-    { device: "cpu", dtype: "fp32" },
-  ]);
+test("planBackends: Windows auto tries the DirectML vocoder first, then CPU", () => {
+  assert.deepEqual(planBackends({ device: "auto" }, "win32"), [{ device: "dml" }, { device: "cpu" }]);
 });
 
 test("planBackends: device cpu skips the GPU", () => {
-  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64", ALL_LOCAL);
-  assert.deepEqual(plan, [{ device: "cpu", dtype: "fp32" }]);
+  assert.deepEqual(planBackends({ device: "cpu" }, "win32"), [{ device: "cpu" }]);
 });
 
-test("planBackends: macOS auto stays on CPU q8 (unchanged behavior)", () => {
-  const plan = planBackends({ device: "auto", precision: "auto" }, "darwin", "arm64", ONLY_Q8);
-  assert.deepEqual(plan, [{ device: "cpu", dtype: "q8" }]);
-  assert.equal(plan[0].fallbackReason, undefined, "auto on a GPU-less platform is not a fallback");
+test("planBackends: macOS auto is CPU, and that is not a fallback", () => {
+  const plan = planBackends({ device: "auto" }, "darwin");
+  assert.deepEqual(plan, [{ device: "cpu" }]);
 });
 
 test("planBackends: device gpu without a GPU backend explains the CPU fallback", () => {
-  const plan = planBackends({ device: "gpu", precision: "auto" }, "linux", "x64", ONLY_Q8);
+  const plan = planBackends({ device: "gpu" }, "linux");
   assert.equal(plan.length, 1);
   assert.equal(plan[0].device, "cpu");
   assert.match(plan[0].fallbackReason, /no GPU backend on linux/);
 });
 
-test("planBackends: Windows CPU without fp32 on disk uses bundled q8 and offers fp32", () => {
-  const plan = planBackends({ device: "cpu", precision: "auto" }, "win32", "x64", ONLY_Q8);
-  assert.deepEqual(plan, [{ device: "cpu", dtype: "q8", upgrade: "fp32" }]);
+// Official kokoro: input_ids = [0, *(vocab[p] for p in phonemes if p in vocab), 0]
+const VOCAB = { a: 43, b: 44, " ": 16, "ˈ": 156, "ɪ": 102 };
+
+test("tokenize: official mapping — vocab chars only, framed by pad 0", () => {
+  assert.deepEqual(tokenize("ab ˈɪ", VOCAB), [0, 43, 44, 16, 156, 102, 0]);
+  assert.deepEqual(tokenize("a?b", VOCAB), [0, 43, 44, 0], "unknown symbols are dropped");
+  assert.deepEqual(tokenize("", VOCAB), [0, 0]);
 });
 
-test("planBackends: the GPU entry needs no upgrade (q8 is its best precision)", () => {
-  const plan = planBackends({ device: "auto", precision: "auto" }, "win32", "x64", ONLY_Q8);
-  assert.deepEqual(plan[0], { device: "dml", dtype: "q8" });
-  assert.deepEqual(plan[1], { device: "cpu", dtype: "q8", upgrade: "fp32" });
+test("tokenize: caps at the model's 510-phoneme context", () => {
+  const ids = tokenize("a".repeat(600), VOCAB);
+  assert.equal(ids.length, 512);
+  assert.equal(ids[0], 0);
+  assert.equal(ids[511], 0);
 });
 
-test("planBackends: an explicit precision is used as-is (downloaded if needed)", () => {
-  const plan = planBackends({ device: "cpu", precision: "fp32" }, "win32", "x64", ONLY_Q8);
-  assert.deepEqual(plan, [{ device: "cpu", dtype: "fp32" }]);
+test("styleRow: official voice row is len(phonemes) - 1 (kokoro-js uses + 1)", () => {
+  // 104 input ids = 102 phonemes + 2 pads -> row 101
+  assert.equal(styleRow(104), 101);
+  assert.equal(styleRow(3), 0); // one phoneme
+  assert.equal(styleRow(2), 0); // clamp
+  assert.equal(styleRow(600), 509); // clamp to the voice pack's 510 rows
 });

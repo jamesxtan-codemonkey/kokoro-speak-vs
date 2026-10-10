@@ -21,6 +21,7 @@ Code. It keeps the Kokoro model **warm** across calls for low latency.
 
 ```bash
 npm install
+npm run prepare-model    # once: official weights → models/kokoro-speak
 npm run build:mcp        # → dist/mcp.js (executable, runs with node)
 ```
 
@@ -73,13 +74,12 @@ paste its guidance into your prompt/instructions.
   speakers.
 - **macOS and Windows** use native PCM streaming (audify → CoreAudio / WASAPI): exact pause-free
   playback, instant interrupt. Other platforms fall back to the OS CLI player.
-- **GPU:** on Windows the server synthesizes on the GPU via DirectML (same
-  `auto` logic as the extension, falling back to the CPU). Override with env
-  vars in the server registration: `KOKORO_SPEAK_DEVICE` = `auto` | `gpu` | `cpu`
-  and `KOKORO_SPEAK_PRECISION` = `auto` | `q8` | `fp16` | `fp32`.
-- **Offline:** run `npm run fetch-model` once and the server uses the model in
-  `<repo>/models` (the same one the VSIX bundles) instead of downloading it;
-  `KOKORO_SPEAK_OFFLINE=1` forbids downloads entirely.
+- **Model:** the server uses `<repo>/models/kokoro-speak` — the official Kokoro
+  weights converted by `npm run prepare-model` (the same files the VSIX
+  bundles). It never downloads anything.
+- **GPU:** on Windows the vocoder runs on the GPU via DirectML (same `auto`
+  logic as the extension, falling back to the CPU). Override with the env var
+  `KOKORO_SPEAK_DEVICE` = `auto` | `gpu` | `cpu` in the server registration.
 - `speak` **blocks until the audio finishes** — keep spoken text short; don't
   queue many long calls. Call `speak` again to interrupt.
 - stdout is the MCP JSON-RPC channel; the server routes all library logging to

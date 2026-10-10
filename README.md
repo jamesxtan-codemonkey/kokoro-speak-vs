@@ -11,7 +11,9 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 - **Synthesis runs in the extension host** via `onnxruntime-node`. No webview, no
   CSP, no browser autoplay restrictions. Where it runs is set by
   `kokoroSpeak.device` (see [GPU acceleration](#gpu-acceleration-windows)): the
-  GPU via DirectML on Windows (~25x realtime), otherwise the CPU (~3–4x).
+  vocoder on the GPU via DirectML on Windows (~17x realtime), otherwise the CPU
+  (~4x). The model is the official one, converted and validated — see
+  [The model](#the-model).
 - Text is split into sentences (`tts.stream()` + an explicit `TextSplitterStream`
   we `close()`). Each sentence is played as soon as it's synthesized — and because
   host synthesis (~3x) outruns playback, the rest are always ready in time.
@@ -39,46 +41,72 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) for the full design.
 > real dynamic `import()` (hidden from esbuild) to avoid `ERR_REQUIRE_ESM` on the
 > Node that ships in VS Code.
 
+## The model
+
+Kokoro Speak runs the **official Kokoro-82M v1.0 weights**
+([hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), Apache-2.0,
+pinned revision, SHA-256 verified), converted to ONNX by
+[tools/convert/convert.py](tools/convert/convert.py) and **validated against the
+official PyTorch model** before it's packaged. It ships in the VSIX as two
+files in `models/kokoro-speak/` (with a `manifest.json` of provenance, hashes
+and validation results):
+
+| File | Precision | What it does | Runs on |
+|---|---|---|---|
+| `frontend.onnx` (112 MB) | fp32 | phonemes → durations, pitch, features (all the LSTMs) | CPU |
+| `decoder.onnx` (107 MB) | fp16 network, fp32 phase/STFT math | features → 24 kHz audio (the vocoder) | GPU (Windows) or CPU |
+
+**Why not the ready-made ONNX** (`onnx-community/Kokoro-82M-v1.0-ONNX`, which
+kokoro-js loads by default)? Measured against the official model (log-spectral
+distance; the official model differs from *itself* by ~1.2 between runs, since
+its vocoder adds random noise):
+
+| Model | Distance from official | Loudness vs official |
+|---|---|---|
+| **This conversion** (GPU / CPU) | **~1.4–1.7** | 0.97–1.00× |
+| onnx-community fp32 | 3.8 | 1.44× |
+| onnx-community q8 (what kokoro-js users usually run) | 10.3, and timing shifts | 1.41× |
+
+The gaps come from the export, not the weights: kokoro's ONNX-friendly STFT is
+an approximation (replicate padding, no window normalisation — hence +44%
+loudness), and int8 quantisation shifts the duration predictor. The conversion
+uses an exact convolutional STFT, keeps the model unquantised, keeps the
+official vocoder noise, and picks the voice-style row the way the official
+pipeline does (kokoro-js is one row off). kokoro-js is still used for its
+phonemizer (espeak-ng — the official pipeline uses `misaki`, so a few words can
+be phonemized differently) and its voice files (bit-identical to the official
+ones).
+
 ## GPU acceleration (Windows)
 
-On Windows, Kokoro runs on the GPU through **DirectML**, which works with any
-DirectX 12 GPU (NVIDIA, AMD, Intel; integrated GPUs included). No CUDA install is
-needed — `DirectML.dll` ships inside `onnxruntime-node`.
+On Windows the vocoder runs on the GPU through **DirectML**, which works with
+any DirectX 12 GPU (NVIDIA, AMD, Intel; integrated GPUs included). No CUDA
+install is needed — `DirectML.dll` ships inside `onnxruntime-node`.
 
 | Setting | Values |
 |---|---|
 | `kokoroSpeak.device` | `auto` (default: GPU if the platform has one, else CPU) · `gpu` · `cpu` |
-| `kokoroSpeak.precision` | `auto` (default) · `q8` · `fp16` · `fp32` |
+
+Why the model is split: DirectML's LSTM kernel re-plans for every new sequence
+length (~1.8 s per sentence — every sentence is a new length), while the
+vocoder's convolutions are fast on the GPU. So the frontend (~0.1 s on the CPU)
+stays on the CPU and only the vocoder goes to the GPU. Measured on an RTX 4090 /
+i7-10700, `onnxruntime-node` 1.30:
+
+| Vocoder on | Speed |
+|---|---|
+| DirectML (GPU) | **~17x realtime** (first audio ~0.4 s) |
+| CPU (x64) | ~4x realtime (first audio ~1.5 s) |
 
 The GPU is checked with a short warm-up line when the model loads. If it fails
-(no DirectX 12 device, a remote session without a GPU, a driver error), or the
-GPU fails mid-run (e.g. device lost after sleep), synthesis switches to the CPU,
-warns once, and keeps playing. The status-bar tooltip shows the engine in use,
-e.g. *GPU (DirectML), q8*. Changing either setting reloads the model on the next
-Speak.
-
-Measured on an RTX 4090 / i7-10700, `onnxruntime-node` 1.30:
-
-| Backend | q8 | fp16 | fp32 |
-|---|---|---|---|
-| DirectML (GPU) | **~25–30x** | ~6x | ~6x |
-| CPU (x64) | ~1.2x | ~5x | ~4x |
-
-So `auto` precision picks **q8 on the GPU** and prefers **fp32 on a Windows x64
-CPU** (q8 is barely faster than playback there, which can stutter). DirectML only
-keeps its fast path for the first input shape it sees, and every sentence has a
-different length; the quantized model's ops stay fast regardless, the float
-models don't. macOS and Linux keep CPU + q8 as before.
-
-Only q8 ships in the VSIX (see [Packaging](#packaging-self-contained-vsix)), so a
-Windows machine that ends up on the CPU starts on the bundled q8 and offers a
-one-time **Download faster CPU model (325 MB)**. It's stored in VS Code's global
-storage (survives extension updates) and used automatically from then on.
+(no DirectX 12 device, a remote session without a GPU, a driver error), or
+fails mid-run (e.g. device lost after sleep), the vocoder switches to the CPU,
+warns once, and keeps playing. The status-bar tooltip shows where it runs.
+macOS and Linux run on the CPU.
 
 > DirectML needs `onnxruntime-node` ≥ 1.22 — 1.21 (the version
 > `@huggingface/transformers` 3.8 pins) fails on Kokoro's `ConvTranspose`.
-> `package.json` `overrides` pins `onnxruntime-node`/`onnxruntime-common` to
-> 1.30.0.
+> `package.json` depends on (and `overrides` transformers to) 1.30.0.
 
 ## Features
 
@@ -96,8 +124,8 @@ storage (survives extension updates) and used automatically from then on.
 - Markdown preview is handled: the keybinding works there and the underlying
   document is spoken with Markdown syntax stripped (`src/textprep.ts`).
 - Settings: `kokoroSpeak.voice` (28 voices), `kokoroSpeak.speed` (0.5–2.0),
-  `kokoroSpeak.bufferSeconds`, `kokoroSpeak.device` / `kokoroSpeak.precision`,
-  plus a **Select Voice** quick-pick.
+  `kokoroSpeak.bufferSeconds`, `kokoroSpeak.device`, plus a **Select Voice**
+  quick-pick.
 
 ## Normalization
 
@@ -151,9 +179,11 @@ proactively. Full setup: [docs/mcp-voice.md](docs/mcp-voice.md).
 
 ## Verification
 
-`npm test` runs a partial end-to-end round-trip: **text → Kokoro TTS → audio →
-local Whisper (whisper-base.en) → text**, asserting word-level match — proof the
-speech is intelligible, not just non-empty. All local, no API key.
+`npm test` runs a partial end-to-end round-trip through the shipped model: **text
+→ Kokoro (models/kokoro-speak via `src/synth.ts`) → audio → local Whisper
+(whisper-base.en) → text**, asserting word-level match — proof the speech is
+intelligible, not just non-empty. All local, no API key. (Needs the converted
+model: `npm run prepare-model`.)
 
 > Finding captured as a test: both whisper base.en and small.en mishear the brand
 > name "Kokoro" (out-of-vocab proper noun) — a verifier limit, not a synthesis
@@ -163,19 +193,24 @@ Host synthesis is verified in Node (`src/synth.ts`): real Kokoro stream
 concatenates sentences into one gapless WAV at ~2.5–3x realtime; the OS player
 (`src/player.ts`) is verified for finish/pause/stop and fallback.
 
-The round-trip runs on CPU by default. To verify another backend, set
-`KOKORO_DEVICE` / `KOKORO_DTYPE`, e.g. the Windows GPU path:
+The round-trip runs the vocoder on the CPU by default; `KOKORO_DEVICE=gpu` checks
+the Windows GPU path:
 
 ```powershell
-$env:KOKORO_DEVICE="dml"; node --test test/roundtrip.test.mjs
+$env:KOKORO_DEVICE="gpu"; node --test test/roundtrip.test.mjs
 ```
+
+The model conversion has its own gates: [tools/convert/convert.py](tools/convert/convert.py)
+refuses to write files unless the ONNX output matches the official PyTorch
+model (same durations, loudness within 6%, spectral distance within bounds).
 
 ## Layout
 
 | Path                   | What                                                         |
 |------------------------|-------------------------------------------------------------|
 | `src/extension.ts`     | Host: commands, status bar, streaming play queue.            |
-| `src/synth.ts`         | Host Kokoro synthesis → concatenated WAV segments.           |
+| `src/synth.ts`         | Host Kokoro synthesis (frontend CPU + vocoder GPU/CPU) → WAV segments. |
+| `tools/convert/`       | Official weights → validated ONNX (Python; run by `npm run prepare-model`). |
 | `src/player.ts`        | OS audio player wrapper (play/pause/stop, fallback chain).    |
 | `src/textprep.ts`      | Markdown stripping.                                           |
 | `src/normalize.ts`     | Speech normalization: deterministic rules + LLM (CLI/API).   |
@@ -186,14 +221,15 @@ $env:KOKORO_DEVICE="dml"; node --test test/roundtrip.test.mjs
 ## Run it (F5)
 
 ```bash
-npm install     # approve native postinstalls (onnxruntime-node, audify, esbuild)
-npm run build   # bundle the extension host (dist/extension.js)
+npm install            # approve native postinstalls (onnxruntime-node, audify, esbuild)
+npm run prepare-model  # official weights → models/kokoro-speak (Python 3.10–3.12, once)
+npm run build          # bundle the extension host (dist/extension.js)
 # press F5 → "Run Kokoro Speak (Extension)", then select text → Cmd/Ctrl+Alt+S
 ```
 
-> F5 uses the model in `models/` if you've run `npm run fetch-model` (packaging
-> does it for you); otherwise the first Speak downloads the q8 weights (~90 MB)
-> from Hugging Face and caches them.
+> `prepare-model` keeps its own virtualenv in `.venv-convert` (CPU-only torch,
+> ~1 GB) and takes a few minutes the first time; afterwards it just verifies
+> `models/kokoro-speak` against its manifest. Nothing is downloaded at runtime.
 
 ## Packaging (self-contained VSIX)
 
@@ -202,8 +238,8 @@ extension, the native runtime and the Kokoro model inside — nothing is
 downloaded on first use.
 
 ```bash
-npm run package:win   # → kokoro-speak-vs-win32-x64-<version>.vsix     (~117 MB)
-npm run package:mac   # → kokoro-speak-vs-darwin-arm64-<version>.vsix  (~115 MB)
+npm run package:win   # → kokoro-speak-vs-win32-x64-<version>.vsix     (~250 MB)
+npm run package:mac   # → kokoro-speak-vs-darwin-arm64-<version>.vsix  (~250 MB)
 npm run package       # this machine's platform
 npm run verify-vsix -- kokoro-speak-vs-win32-x64-<version>.vsix --install
 ```
@@ -214,17 +250,17 @@ the host:
 
 | Part | How it gets in the VSIX |
 |---|---|
-| Kokoro model (q8, 92 MB) | [scripts/fetch-model.mjs](scripts/fetch-model.mjs) → `models/`, pinned HF revision + SHA-256 |
-| Voices (28) | ship inside `kokoro-js` |
+| Kokoro model (219 MB) | [scripts/prepare-model.mjs](scripts/prepare-model.mjs) → `models/kokoro-speak`: official weights at a pinned revision, converted + validated by [tools/convert](tools/convert/convert.py); file hashes in its `manifest.json` |
+| Voices (28) | ship inside `kokoro-js` (identical to the official voice tensors) |
 | `onnxruntime-node` | ships every platform; all but the target's are dropped (Windows keeps `DirectML.dll`) |
 | `audify` (audio out) | the target's N-API 8 prebuilt from audify's GitHub release |
-| `sharp` | replaced by a stub — transformers.js imports it but only uses it for images |
+| `sharp` | replaced by a stub — transformers.js (imported by kokoro-js) loads it but only uses it for images |
 
 [scripts/verify-vsix.mjs](scripts/verify-vsix.mjs) checks any VSIX's structure
-(model hashes; every native binary is the target's OS/CPU, read from its
-headers). For the host's own target it also extracts the VSIX and synthesizes
-speech from it **with downloads disabled** (`KOKORO_SPEAK_OFFLINE=1`), under
-Node and under VS Code's Electron runtime; `--install` additionally installs it
+(model files match the bundled manifest; every native binary is the target's
+OS/CPU, read from its headers). For the host's own target it also extracts the
+VSIX and synthesizes speech from it **with networking disabled in-process**,
+under Node and under VS Code's Electron runtime; `--install` additionally installs it
 into a throwaway VS Code profile. Install a VSIX with **Extensions: Install from
 VSIX…** or `code --install-extension <file>.vsix`.
 
