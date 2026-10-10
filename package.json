@@ -71,11 +71,6 @@
         "command": "kokoroSpeak.configure",
         "title": "Kokoro Speak: Configure (AI)",
         "category": "Kokoro Speak"
-      },
-      {
-        "command": "kokoroSpeak.speakHello",
-        "title": "Kokoro Speak: Speak Hello (M1 spike)",
-        "category": "Kokoro Speak"
       }
     ],
     "configuration": {
