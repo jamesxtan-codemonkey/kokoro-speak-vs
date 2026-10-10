@@ -2,7 +2,7 @@
   "name": "kokoro-speak-vs",
   "displayName": "Kokoro Speak",
   "description": "Read text aloud in any editor using the open-weight Kokoro 82M TTS model.",
-  "version": "0.0.4",
+  "version": "0.0.8",
   "publisher": "JamesTan",
   "engines": {
     "vscode": "^1.90.0"
