@@ -313,11 +313,40 @@ function packWords(s: string, maxChars: number): string[] {
   return out;
 }
 
+// Clause breaks to try, strongest first, before falling back to bare word
+// boundaries. Each chunk is voiced as its own utterance (closing intonation
+// plus edge silence), so a seam at a word boundary sounds like a stray pause
+// mid-phrase ("the outcome, its | reason"); a seam at a clause break lands
+// where a reader would pause anyway.
+const CLAUSE_BREAKS = [/(?<=[;:—–])\s+|\s+(?=[—–]\s)/, /(?<=,)\s+/];
+
+/** Split an over-long sentence into <=maxChars chunks, cutting at the
+ *  strongest clause break that fits and word-packing only as a last resort. */
+function packClauses(s: string, maxChars: number, level = 0): string[] {
+  if (s.length <= maxChars) return [s];
+  if (level >= CLAUSE_BREAKS.length) return packWords(s, maxChars);
+  const out: string[] = [];
+  let cur = "";
+  for (const clause of s.split(CLAUSE_BREAKS[level])) {
+    if (cur && cur.length + 1 + clause.length <= maxChars) {
+      cur += " " + clause;
+      continue;
+    }
+    if (cur) out.push(cur);
+    cur = "";
+    if (clause.length <= maxChars) cur = clause;
+    else out.push(...packClauses(clause, maxChars, level + 1));
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /**
  * Split text into synthesis-sized chunks so no single Kokoro generation exceeds
  * its token cap (which would truncate, dropping the tail). Splits on sentence
  * boundaries — `.`/`!`/`?` optionally followed by a closing quote/paren, then
- * whitespace, plus newlines — then word-packs any still-too-long sentence.
+ * whitespace, plus newlines — then cuts any still-too-long sentence at clause
+ * breaks, word-packing only a clause that is itself too long.
  */
 export function chunkText(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
   const sentences = text
@@ -328,7 +357,7 @@ export function chunkText(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
   const chunks: string[] = [];
   for (const s of sentences) {
     if (s.length <= maxChars) chunks.push(s);
-    else chunks.push(...packWords(s, maxChars));
+    else chunks.push(...packClauses(s, maxChars));
   }
   return chunks;
 }
