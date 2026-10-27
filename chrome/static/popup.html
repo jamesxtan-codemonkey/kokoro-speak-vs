@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kokoro Speak</title>
+  <link rel="stylesheet" href="ui.css" />
+</head>
+<body class="popup">
+  <header class="brand">
+    <img src="icons/icon-32.png" width="20" height="20" alt="" />
+    <h1>Kokoro Speak</h1>
+  </header>
+
+  <p id="status" class="status" role="status" aria-live="polite">Ready</p>
+  <p id="note" class="note" hidden></p>
+  <button id="allow" class="allow primary" hidden></button>
+
+  <div class="buttons">
+    <button id="speak" class="primary">Speak selection<kbd data-command="speak-selection"></kbd></button>
+    <button id="read">Read page<kbd data-command="read-page"></kbd></button>
+    <button id="pause" disabled>Pause<kbd data-command="pause-resume"></kbd></button>
+    <button id="stop" disabled>Stop<kbd data-command="stop"></kbd></button>
+  </div>
+
+  <label class="field">
+    <span>Voice</span>
+    <select id="voice"></select>
+  </label>
+  <label class="field">
+    <span>Speed <output id="speed-out"></output></span>
+    <input id="speed" type="range" min="0.5" max="2" step="0.05" />
+  </label>
+
+  <footer>
+    <span id="backend"></span>
+    <a href="#" id="options">Options</a>
+  </footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

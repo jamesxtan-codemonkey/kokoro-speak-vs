@@ -34,7 +34,9 @@ node_modules/**/types/**
 node_modules/@types/**
 node_modules/@huggingface/transformers/src/**
 node_modules/@huggingface/jinja/src/**
-node_modules/onnxruntime-web/**
+# (at any depth: the Chrome extension's newer copy sits at the top level, which
+# moves transformers.js's own copy under its node_modules)
+node_modules/**/onnxruntime-web/**
 node_modules/@protobufjs/**
 node_modules/flatbuffers/**
 node_modules/guid-typescript/**

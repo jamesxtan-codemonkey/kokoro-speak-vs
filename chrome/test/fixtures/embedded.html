@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Embedded docs</title></head>
+<body>
+  <h1>A page with embedded docs</h1>
+  <p>The documentation below comes from another site, in a frame.</p>
+  <!-- Another origin than the page: same server, reached as localhost instead of 127.0.0.1. -->
+  <iframe id="docs" width="600" height="200"></iframe>
+  <script>
+    document.getElementById("docs").src = location.href.replace("127.0.0.1", "localhost").replace(/[^/]*$/, "frame.html");
+  </script>
+</body>
+</html>

@@ -4,25 +4,37 @@
 //   deterministic — built-in regex rules + user replacements (offline, instant)
 //   ai            — an LLM applies the natural-language rules; deterministic is
 //                   the fallback when the backend is unavailable or fails.
-// No `vscode` import — pure logic, unit-testable in Node.
+// No `vscode` import — unit-testable in Node. The rules themselves and the
+// Anthropic API call live in core/normalize.ts, shared with the Chrome
+// extension; this file adds the Node-only CLI backends and a cache.
 
 import { spawn, spawnSync, ChildProcess, SpawnOptions } from "child_process";
 import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { basename, join } from "path";
+import {
+  NormMode,
+  Replacement,
+  aiNormalize,
+  anthropicCall,
+  deterministic,
+  preNormalize,
+  stripWrapping,
+} from "./core/normalize";
+
+export {
+  applyReplacements,
+  applySpellOut,
+  deterministic,
+  hasCandidates,
+  stripEmphasis,
+  SEED_RULES,
+} from "./core/normalize";
+export type { NormMode, Replacement } from "./core/normalize";
 
 const IS_WIN = process.platform === "win32";
 
-export type NormMode = "off" | "deterministic" | "ai";
 export type Backend = "auto" | "cli" | "api";
-
-export interface Replacement {
-  from?: string; // literal match
-  pattern?: string; // OR a regex source
-  to?: string;
-  replacement?: string;
-  flags?: string;
-}
 
 export interface NormalizeOptions {
   mode: NormMode;
@@ -34,207 +46,6 @@ export interface NormalizeOptions {
   model: string; // for backend "api"
   apiKey?: string; // for backend "api" (from SecretStorage)
   timeoutMs: number;
-}
-
-// ---- deterministic engine --------------------------------------------------
-
-const SCALE: Record<string, string> = {
-  k: "thousand",
-  m: "million",
-  b: "billion",
-  t: "trillion",
-};
-
-// Curated emoji → short spoken word. Anything not listed is dropped (silent)
-// rather than read as raw Unicode. Meaningful symbols speak; decorative ones
-// (most faces) are removed.
-const EMOJI: Record<string, string> = {
-  "✅": "check", "✔": "check", "✓": "check", "☑": "check", "🆗": "okay",
-  "❌": "cross", "✖": "cross", "✗": "cross", "⛔": "no entry", "🚫": "no",
-  "⚠": "warning", "‼": "warning", "❗": "warning", "❓": "question",
-  "ℹ": "info", "💡": "light bulb", "📝": "note", "📌": "pin", "🔗": "link",
-  "🚀": "rocket", "🔥": "fire", "✨": "sparkles", "⭐": "star", "🌟": "star",
-  "🎉": "party", "🎊": "party", "🎯": "target", "🐛": "bug", "💯": "one hundred",
-  "👍": "thumbs up", "👎": "thumbs down", "🙏": "thanks", "👀": "eyes",
-  "🤔": "thinking", "🛑": "stop", "⏰": "alarm", "📅": "calendar",
-  "🔒": "locked", "🔓": "unlocked", "⏳": "hourglass", "💀": "skull",
-  "❤": "heart", "🧡": "heart", "💛": "heart", "💚": "heart", "💙": "heart",
-  "💜": "heart", "🖤": "heart", "🤍": "heart", "🤎": "heart",
-};
-
-const ABBREV: Array<[RegExp, string]> = [
-  [/\be\.g\.(?=\s|$|,)/gi, "for example"],
-  [/\bi\.e\.(?=\s|$|,)/gi, "that is"],
-  [/\betc\.(?=\s|$|,)/gi, "etcetera"],
-  [/\bvs\.?(?=\s|$|,)/gi, "versus"],
-  [/\bapprox\.(?=\s|$|,)/gi, "approximately"],
-  [/\bDr\.(?=\s)/g, "Doctor"],
-  [/\bMr\.(?=\s)/g, "Mister"],
-  [/\bMrs\.(?=\s)/g, "Missus"],
-  [/\bMs\.(?=\s)/g, "Miz"],
-  [/\bProf\.(?=\s)/g, "Professor"],
-];
-
-const ORDINAL = ["", "first", "second", "third", "fourth"];
-
-/** Apply user-defined literal/regex replacements. */
-export function applyReplacements(text: string, reps: Replacement[]): string {
-  let out = text;
-  for (const r of reps ?? []) {
-    try {
-      if (r.pattern != null) {
-        out = out.replace(new RegExp(r.pattern, r.flags ?? "g"), r.replacement ?? "");
-      } else if (r.from) {
-        out = out.split(r.from).join(r.to ?? "");
-      }
-    } catch {
-      /* skip a malformed rule rather than fail the whole pass */
-    }
-  }
-  return out;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Spell listed acronyms letter-by-letter: "API" → "A P I" (whole words only). */
-export function applySpellOut(text: string, list?: string[]): string {
-  let out = text;
-  for (const a of list ?? []) {
-    const acr = a?.trim();
-    if (!acr) continue;
-    out = out.replace(
-      new RegExp(`\\b${escapeRegExp(acr)}\\b`, "g"),
-      acr.split("").join(" ")
-    );
-  }
-  return out;
-}
-
-/**
- * Built-in transforms. Principle: expand symbols / scales / abbreviations to
- * words, but leave bare digit runs for Kokoro to vocalize ("10 billion dollars"
- * is read correctly as-is). Conservative — ambiguous cases are left alone and
- * handled by the `ai` mode instead.
- */
-/**
- * Silence Markdown emphasis markers so they aren't read as "asterisk". Strips
- * PAIRED emphasis only — **bold**, *italic*, __x__, _x_ vanish (the word
- * stays) — while lone operators (2*3, *ptr, **kwargs) and identifiers
- * (snake_case) survive. Applied in the normalizer (not just the Markdown
- * stripper) so emphasis in text spoken from a non-Markdown editor, or returned
- * by the LLM, is still silenced. The inner-no-space guard on `*` keeps spaced
- * multiplication ("a * b") intact; `_` only at word boundaries (CommonMark).
- */
-export function stripEmphasis(s: string): string {
-  return s
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(?!\s)([^*]+?)(?<!\s)\*/g, "$1")
-    .replace(/(?<!\w)__(.+?)__(?!\w)/g, "$1")
-    .replace(/(?<!\w)_(.+?)_(?!\w)/g, "$1");
-}
-
-export function deterministic(text: string): string {
-  let s = stripEmphasis(text);
-
-  // Arrows → "to". Unicode arrows in any context; the ASCII single "->" only
-  // when whitespace-flanked, so code like "x->y", "a->b" is left intact. A
-  // double "-->" is deliberately not matched — it's ambiguous with HTML comment
-  // closes ("<!-- -->") and code, so leave it alone. Non-consuming boundaries
-  // let adjacent arrows ("-> ->") both convert.
-  s = s.replace(/\s*(?:→|⟶|⇒|↦)\s*/g, " to ");
-  s = s.replace(/(?<=^|\s)->(?=\s|$)/g, "to");
-
-  // Tilde before a number/currency → "about" (~100 → about 100).
-  s = s.replace(/~\s?(?=[\d$])/g, "about ");
-
-  // Numeric dates (ISO YYYY-MM-DD) → read each group separately, NOT as a range.
-  // We can't reliably tell the month from the day across locale formats, so we
-  // don't interpret — just swap the hyphens for pauses so "2026-06-16" is spoken
-  // as "2026, 06, 16" rather than the wrong "2026 to 06 to 16". Runs before the
-  // range rules so a 4-2-2 date is never mistaken for a numeric range.
-  s = s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$1, $2, $3");
-
-  // Ranges (en/em dash between number-ish tokens) → " to ".
-  s = s.replace(
-    /(\d[\d,]*(?:\.\d+)?\s?[kKmMbBtT]?)\s?[–—]\s?(?=\d)/g,
-    "$1 to "
-  );
-  // ASCII hyphen ranges only in the unambiguous percent context ("5-20%" →
-  // "5 to 20 percent"); bare "a-b" hyphens are left alone (dates, phone numbers,
-  // negatives) and handled by ai mode instead.
-  s = s.replace(
-    /(\d[\d,]*(?:\.\d+)?)\s?-\s?(\d[\d,]*(?:\.\d+)?)(?=\s?%)/g,
-    "$1 to $2"
-  );
-
-  // Currency with scale: $10B → 10 billion dollars
-  s = s.replace(
-    /\$\s?(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
-    (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]} dollars`
-  );
-  // Plain currency: $10 → 10 dollars
-  s = s.replace(/\$\s?(\d[\d,]*(?:\.\d+)?)/g, "$1 dollars");
-
-  // Percentages: 50% → 50 percent (a leading ~ was handled above).
-  s = s.replace(/(\d[\d,]*(?:\.\d+)?)\s?%/g, "$1 percent");
-
-  // Standalone scale after a number: 345k → 345 thousand
-  s = s.replace(
-    /\b(\d[\d,]*(?:\.\d+)?)\s?([kKmMbBtT])\b/g,
-    (_m, num, sc) => `${num} ${SCALE[sc.toLowerCase()]}`
-  );
-
-  // Versions: v1.2.3 → version 1 point 2 point 3
-  s = s.replace(/\bv(\d+(?:\.\d+)+)\b/gi, (_m, ver: string) => {
-    return "version " + ver.split(".").join(" point ");
-  });
-
-  // Quarters: Q4 2025 → fourth quarter 2025; Q4 → fourth quarter
-  s = s.replace(/\bQ([1-4])\b(\s+\d{4})?/g, (_m, q: string, year: string) => {
-    return `${ORDINAL[Number(q)]} quarter${year ?? ""}`;
-  });
-
-  // Abbreviations.
-  for (const [re, repl] of ABBREV) s = s.replace(re, repl);
-
-  // Symbols.
-  s = s.replace(/\s?&\s?/g, " and ").replace(/@/g, " at ");
-
-  // Emoji → short words (known) then drop the rest, so nothing is read as raw
-  // Unicode. Known glyphs first (covers dingbats not flagged as emoji), then
-  // strip joiners/variation-selectors/skin tones and any remaining pictographs.
-  for (const [e, w] of Object.entries(EMOJI)) {
-    if (s.includes(e)) s = s.split(e).join(` ${w} `);
-  }
-  s = s.replace(/[\u200D\uFE0F]|\p{Emoji_Modifier}/gu, "");
-  s = s.replace(/\p{Extended_Pictographic}/gu, " ");
-
-  // Drop thousands commas inside numbers so the TTS reads them cleanly.
-  s = s.replace(/(?<=\d),(?=\d{3}\b)/g, "");
-
-  // Tidy whitespace introduced by replacements.
-  return s.replace(/[ \t]{2,}/g, " ").trim();
-}
-
-/** Cheap pre-check: is there anything worth normalizing? */
-export function hasCandidates(text: string): boolean {
-  return /[$%@&]|\d|\b(?:e\.g\.|i\.e\.|etc\.|vs\.|approx\.|Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)|\bv\d+\.\d|\bQ[1-4]\b/i.test(
-    text
-  );
-}
-
-// ---- LLM prompt ------------------------------------------------------------
-
-const INSTRUCTION =
-  "You rewrite text so it sounds correct when read aloud by a text-to-speech engine. " +
-  "Apply the rules below. Output ONLY the rewritten text — no preamble, no quotes, " +
-  "no markdown, no explanation. Preserve meaning and wording except where a rule " +
-  "applies. If nothing needs changing, return the text unchanged.";
-
-function buildSystem(rules: string): string {
-  return `${INSTRUCTION}\n\nRules:\n${rules.trim()}`;
 }
 
 // ---- cache -----------------------------------------------------------------
@@ -460,50 +271,6 @@ function runCli(
   });
 }
 
-async function runApi(
-  system: string,
-  user: string,
-  model: string,
-  apiKey: string,
-  timeoutMs: number,
-  maxTokens: number
-): Promise<string | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: "user", content: user }],
-      }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return null;
-    const data: any = await res.json();
-    // Only a clean completion is usable; refusal or a max_tokens cut would
-    // return text truncated mid-sentence — fall back to deterministic instead.
-    if (data?.stop_reason && data.stop_reason !== "end_turn") return null;
-    const out = (data?.content ?? [])
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("")
-      .trim();
-    return out ? stripWrapping(out) : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export interface BackendOptions {
   backend: Backend;
   command: string;
@@ -533,18 +300,9 @@ export async function callBackend(
     return runCli(backend.cmd, `${system}\n\n${user}`, opts.timeoutMs);
   }
   if (backend?.kind === "api") {
-    return runApi(system, user, opts.model, opts.apiKey!, opts.timeoutMs, maxTokens);
+    return anthropicCall({ apiKey: opts.apiKey!, model: opts.model, timeoutMs: opts.timeoutMs })(system, user, maxTokens);
   }
   return null;
-}
-
-/** Strip accidental code-fence / quote wrapping from a model response. */
-function stripWrapping(s: string): string {
-  let t = s.trim();
-  const fence = t.match(/^```[a-z]*\n([\s\S]*?)\n```$/i);
-  if (fence) t = fence[1].trim();
-  if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') t = t.slice(1, -1);
-  return t.trim();
 }
 
 // ---- entry point -----------------------------------------------------------
@@ -558,10 +316,7 @@ export async function normalize(
 
   // User replacements + acronym spell-out apply first (and feed the LLM a
   // guaranteed pass in ai mode).
-  const pre = applySpellOut(
-    applyReplacements(text, opts.replacements),
-    opts.spellOut
-  );
+  const pre = preNormalize(text, opts);
 
   if (opts.mode === "deterministic") return deterministic(pre);
 
@@ -570,41 +325,9 @@ export async function normalize(
   const hit = cacheGet(key);
   if (hit !== undefined) return hit;
 
-  if (!hasCandidates(pre)) {
-    const det = deterministic(pre);
-    cacheSet(key, det);
-    return det;
-  }
-
-  const result = await callBackend(
-    buildSystem(opts.rules),
-    `Text to rewrite:\n${pre}`,
-    opts,
-    // Char count as a token proxy: generous for English, safe for multibyte
-    // text where chars≈tokens, so output isn't capped mid-sentence.
-    Math.min(8192, pre.length + 256)
+  const final = await aiNormalize(pre, opts.rules, (system, user, maxTokens) =>
+    callBackend(system, user, opts, maxTokens)
   );
-
-  // Strip emphasis from the model's output too — a guaranteed floor so markers
-  // are never spoken even if the model echoes them. Fall back to deterministic
-  // on any failure.
-  const final = result ? stripEmphasis(result) : deterministic(pre);
   cacheSet(key, final);
   return final;
 }
-
-export const SEED_RULES = `- Currency: "$10B" → "10 billion dollars"; "$3.5M" → "3.5 million dollars".
-- Tilde before a number means about: "~100 events" → "about 100 events"; "~5-20%" → "about 5 to 20 percent".
-- Ranges: "5-20%" → "5 to 20 percent"; "2010-2020" → "2010 to 2020".
-- Dates: read a numeric date like "2026-06-16" as separate groups with pauses ("2026, 06, 16") — never as a range, never say "to". Don't guess which field is the month versus the day.
-- Percentages: "50%" → "50 percent".
-- Arrows mean "to": "A → C" → "A to C"; "step 1 -> step 2" → "step 1 to step 2".
-- Versions: "v1.2.3" → "version 1 point 2 point 3".
-- Quarters: "Q4 2025" → "fourth quarter 2025".
-- Abbreviations: "e.g." → "for example"; "i.e." → "that is"; "etc." → "etcetera".
-- Spell out initialism acronyms letter by letter (API → "A P I"; LFP → "L F P"), but keep pronounceable acronyms/names as words (NASA, OSCAR, JSON).
-- Never read Markdown markers aloud: "**" and "*" emphasis are silent (keep the word).
-- Read check marks as "check": "✅" → "check". Read other emoji as a short word for what they mean, or drop them.
-- Read code identifiers naturally (split camelCase / snake_case into words).
-- Expand units and symbols, but leave ordinary numbers for the speech engine.
-- Do not change meaning; only rewrite how things are spoken.`;

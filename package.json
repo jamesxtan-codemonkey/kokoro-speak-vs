@@ -262,9 +262,13 @@
     "spike": "node scripts/spike.mjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --outfile=dist/extension.js",
     "build:mcp": "esbuild src/mcp.ts --bundle --platform=node --format=cjs --external:audify --external:onnxruntime-node \"--banner:js=#!/usr/bin/env node\" --outfile=dist/mcp.js && node -e \"require('fs').chmodSync('dist/mcp.js', 0o755)\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p chrome",
     "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --external:kokoro-js --external:onnxruntime-node --external:@huggingface/transformers --external:sharp --external:audify --format=cjs --minify --outfile=dist/extension.js",
     "package": "node scripts/package.mjs",
+    "chrome:build": "node chrome/build.mjs",
+    "chrome:package": "node chrome/build.mjs --zip",
+    "chrome:typecheck": "tsc --noEmit -p chrome",
+    "test:chrome": "node chrome/build.mjs --test && node chrome/test/e2e.mjs",
     "package:win": "node scripts/package.mjs --target win32-x64",
     "package:mac": "node scripts/package.mjs --target darwin-arm64",
     "prepare-model": "node scripts/prepare-model.mjs",
@@ -272,7 +276,7 @@
     "clean": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true});for(const f of fs.readdirSync('.'))if(f.endsWith('.vsix'))fs.rmSync(f)\"",
     "build:vsix": "npm run clean && npm run typecheck && npm run package",
     "watch": "npm run build -- --watch",
-    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --external:onnxruntime-node --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --external:onnxruntime-node --format=cjs --outfile=test/.synth.cjs",
+    "test:build": "esbuild src/normalize.ts --bundle --platform=node --format=cjs --outfile=test/.normalize.cjs && esbuild src/textprep.ts --bundle --platform=node --format=cjs --outfile=test/.textprep.cjs && esbuild src/player.ts --bundle --platform=node --format=cjs --outfile=test/.player.cjs && esbuild src/pcmplayer.ts --bundle --platform=node --external:audify --format=cjs --outfile=test/.pcmplayer.cjs && esbuild src/mcp.ts --bundle --platform=node --external:audify --external:onnxruntime-node --format=cjs --outfile=test/.mcp.cjs && esbuild src/synth.ts --bundle --platform=node --external:onnxruntime-node --format=cjs --outfile=test/.synth.cjs && esbuild src/core/index.ts --bundle --platform=node --format=cjs --outfile=test/.core.cjs",
     "test": "npm run test:build && node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
   "dependencies": {
@@ -283,11 +287,15 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
     "@huggingface/transformers": "3.8.1",
+    "@types/chrome": "0.3.6",
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
+    "onnxruntime-web": "1.30.0",
+    "playwright-core": "1.64.1",
     "typescript": "^5.5.0"
   },
   "overrides": {

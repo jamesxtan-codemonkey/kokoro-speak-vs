@@ -15,6 +15,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { chunkText } from "./core/chunk";
+import { SAMPLE_RATE, tokenize, voiceStyle as styleFromPack } from "./core/model";
+
+export { chunkText } from "./core/chunk";
+export { tokenize, styleRow } from "./core/model";
 
 // kokoro-js is ESM-only. The extension host bundle is CommonJS, and `require()`
 // of an ESM package throws ERR_REQUIRE_ESM on the Node that ships inside VS Code.
@@ -42,8 +47,6 @@ function ort(): any {
 // level up.
 export const MODEL_DIR = path.join(__dirname, "..", "models", "kokoro-speak");
 const VOICES_DIR = path.join(__dirname, "..", "node_modules", "kokoro-js", "voices");
-const SAMPLE_RATE = 24000;
-const MAX_PHONEMES = 510; // the model's 512-token context minus the 2 pad tokens
 const MAX_BUFFER_SEC = 600;
 
 /** "auto" = the platform GPU if there is one (DirectML on Windows), else CPU. */
@@ -83,24 +86,6 @@ export function describeBackend(b: Backend): string {
   return b.device === "dml" ? "GPU (DirectML)" : b.device === "cpu" ? "CPU" : b.device;
 }
 
-/** Official tokenization (kokoro KModel.forward): each phoneme character in the
- *  vocab becomes its id, others are dropped, framed by the pad token 0. */
-export function tokenize(phonemes: string, vocab: Record<string, number>): number[] {
-  const ids: number[] = [];
-  for (const ch of phonemes) {
-    const id = vocab[ch];
-    if (id !== undefined) ids.push(id);
-  }
-  return [0, ...ids.slice(0, MAX_PHONEMES), 0];
-}
-
-/** Voice-pack row for a sequence, as the official pipeline picks it:
- *  KPipeline uses voice[len(phonemes) - 1], and input_ids are the phonemes plus
- *  two pad tokens. (kokoro-js uses the next row up.) */
-export function styleRow(numInputIds: number): number {
-  return Math.min(Math.max(numInputIds - 3, 0), 509);
-}
-
 const voiceCache = new Map<string, Float32Array>();
 function voiceStyle(voice: string, numInputIds: number): Float32Array {
   let pack = voiceCache.get(voice);
@@ -109,8 +94,7 @@ function voiceStyle(voice: string, numInputIds: number): Float32Array {
     pack = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     voiceCache.set(voice, pack);
   }
-  const row = styleRow(numInputIds) * 256;
-  return pack.slice(row, row + 256);
+  return styleFromPack(pack, numInputIds);
 }
 
 /** A loaded model: CPU frontend + vocoder on `backend`. `tts` is a kokoro-js
@@ -279,87 +263,6 @@ export interface SynthOptions {
   speed?: number;
   /** <=0 buffers the whole text into one gapless segment. */
   bufferSeconds?: number;
-}
-
-// Kokoro truncates any single generation past its ~512-token cap. Kokoro's own
-// TextSplitterStream batches greedily and can hand the model an over-long chunk
-// (e.g. when sentence detection misses `." ` or a lowercase follower), silently
-// dropping the tail. So we chunk the text ourselves and generate per chunk, with
-// each chunk kept well under the cap.
-const MAX_CHUNK_CHARS = 250;
-
-/** Greedily pack a long sentence into <=maxChars pieces at word boundaries
- *  (hard-splitting any single oversized token). */
-function packWords(s: string, maxChars: number): string[] {
-  const out: string[] = [];
-  let cur = "";
-  for (let p of s.split(/\s+/)) {
-    while (p.length > maxChars) {
-      if (cur) {
-        out.push(cur);
-        cur = "";
-      }
-      out.push(p.slice(0, maxChars));
-      p = p.slice(maxChars);
-    }
-    if (!cur) cur = p;
-    else if (cur.length + 1 + p.length <= maxChars) cur += " " + p;
-    else {
-      out.push(cur);
-      cur = p;
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-// Clause breaks to try, strongest first, before falling back to bare word
-// boundaries. Each chunk is voiced as its own utterance (closing intonation
-// plus edge silence), so a seam at a word boundary sounds like a stray pause
-// mid-phrase ("the outcome, its | reason"); a seam at a clause break lands
-// where a reader would pause anyway.
-const CLAUSE_BREAKS = [/(?<=[;:—–])\s+|\s+(?=[—–]\s)/, /(?<=,)\s+/];
-
-/** Split an over-long sentence into <=maxChars chunks, cutting at the
- *  strongest clause break that fits and word-packing only as a last resort. */
-function packClauses(s: string, maxChars: number, level = 0): string[] {
-  if (s.length <= maxChars) return [s];
-  if (level >= CLAUSE_BREAKS.length) return packWords(s, maxChars);
-  const out: string[] = [];
-  let cur = "";
-  for (const clause of s.split(CLAUSE_BREAKS[level])) {
-    if (cur && cur.length + 1 + clause.length <= maxChars) {
-      cur += " " + clause;
-      continue;
-    }
-    if (cur) out.push(cur);
-    cur = "";
-    if (clause.length <= maxChars) cur = clause;
-    else out.push(...packClauses(clause, maxChars, level + 1));
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-/**
- * Split text into synthesis-sized chunks so no single Kokoro generation exceeds
- * its token cap (which would truncate, dropping the tail). Splits on sentence
- * boundaries — `.`/`!`/`?` optionally followed by a closing quote/paren, then
- * whitespace, plus newlines — then cuts any still-too-long sentence at clause
- * breaks, word-packing only a clause that is itself too long.
- */
-export function chunkText(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
-  const sentences = text
-    .split(/(?<=[.!?]["')\]]?)\s+/)
-    .flatMap((s) => s.split(/\n+/))
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const chunks: string[] = [];
-  for (const s of sentences) {
-    if (s.length <= maxChars) chunks.push(s);
-    else chunks.push(...packClauses(s, maxChars));
-  }
-  return chunks;
 }
 
 /** Synthesize `text` into concatenated WAV segments. Returns the chunk count. */

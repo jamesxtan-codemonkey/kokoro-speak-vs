@@ -6,7 +6,7 @@ import { loadModel, synthesize } from "./synth";
 import { createPlayer, AudioPlayer } from "./pcmplayer";
 import { getSpeakableText } from "./textprep";
 import { normalize, SEED_RULES } from "./normalize";
-import { DEFAULT_VOICE, isVoice } from "./voices";
+import { DEFAULT_VOICE, isVoice } from "./core/voices";
 
 export interface SpeakOptions {
   voice?: string;

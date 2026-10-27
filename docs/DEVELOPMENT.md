@@ -198,9 +198,11 @@ All npm scripts run under both cmd.exe (Windows) and sh (macOS/Linux).
 | `src/pcmplayer.ts` | Native PCM streaming (audify) and the file-player fallback adapter. |
 | `src/player.ts` | OS audio player wrapper (play/pause/stop, fallback chain). |
 | `src/textprep.ts` | Markdown stripping. |
-| `src/normalize.ts` | Speech normalization: deterministic rules + LLM (CLI/API). |
+| `src/normalize.ts` | Speech normalization for VS Code: the CLI backends and a cache, on top of `src/core`. |
+| `src/core/` | Shared with the Chrome extension: chunking, model inputs, voices, the normalization rules and the Anthropic API call. Pure TypeScript, no Node or DOM APIs. |
+| `chrome/` | The Chrome extension (WebGPU/WASM in an offscreen document, page highlighting). See [chrome/README.md](../chrome/README.md). |
 | `src/speaker.ts`, `src/mcp.ts` | The vscode-free speaker and the MCP server built on it. |
-| `tools/convert/` | Official weights → validated ONNX (Python; run by `npm run prepare-model`). |
+| `tools/convert/` | Official weights → validated ONNX (Python; run by `npm run prepare-model`), and the fp32-compute decoder for WebGPU (`upcast_decoder.py`, run by the Chrome build). |
 | `scripts/` | Model preparation, packaging and VSIX verification. |
 | `skills/normalization-config.md` | Editable instructions the **Configure (AI)** flow follows. |
 | `test/` | Unit tests and the TTS ↔ ASR round-trip (`npm test`). |

@@ -11,9 +11,14 @@ test/.player.cjs
 test/.pcmplayer.cjs
 test/.mcp.cjs
 test/.synth.cjs
+test/.core.cjs
 out/
 out.log
 *.vsix
+kokoro-speak-chrome-*.zip
+chrome/dist/
+chrome/dist-test/
+chrome/test/out/
 .DS_Store
 .gstack/
 **/.gstack/
