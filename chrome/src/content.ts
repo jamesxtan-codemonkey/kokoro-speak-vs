@@ -8,7 +8,7 @@
 // as sentence breaks, so headings and list items are read on their own), and
 // hidden, decorative or form elements are skipped.
 
-import type { Extracted, ToContent } from "./messages";
+import type { Extracted, ToBackground, ToContent } from "./messages";
 
 type Mode = "selection" | "page";
 
@@ -40,11 +40,11 @@ class Builder {
     this.lineStart = true;
   }
 
-  add(node: Text, start: number, end: number, pre: boolean) {
+  add(node: Text, start: number, end: number, pre: boolean, lines: boolean) {
     const data = node.data;
     for (let i = start; i < end; i++) {
       const ch = data[i];
-      if (pre && ch === "\n") {
+      if (lines && ch === "\n") {
         this.newline();
       } else if (!pre && /\s/.test(ch)) {
         if (!this.lineStart && !this.space) this.space = [node, i];
@@ -60,12 +60,16 @@ class Builder {
 
 function visible(el: Element): boolean {
   if (el.getAttribute("aria-hidden") === "true" || (el as HTMLElement).hidden) return false;
+  const style = getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+  // display:contents has no box, but its children are still rendered.
+  if (style.display === "contents") return true;
   if (typeof el.checkVisibility === "function" && !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true } as any)) {
     return false;
   }
   // Visually hidden "screen reader only" text (clipped to a pixel).
   const r = el.getBoundingClientRect();
-  return !(r.width <= 1 && r.height <= 1 && getComputedStyle(el).position === "absolute");
+  return !(r.width <= 1 && r.height <= 1 && style.position === "absolute");
 }
 
 function skipOnPage(el: Element): boolean {
@@ -78,29 +82,59 @@ function skipOnPage(el: Element): boolean {
   return false;
 }
 
+let readableCache = new WeakMap<Element, boolean>();
+function readableRoot(node: Node, mode: Mode): boolean {
+  const path: Element[] = [];
+  let readable = true;
+  for (let el = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement; el; el = el.parentElement) {
+    const cached = readableCache.get(el);
+    if (cached !== undefined) {
+      readable = cached;
+      break;
+    }
+    path.push(el);
+    if (SKIP.has(el.tagName.toUpperCase()) || !visible(el) || (mode === "page" && skipOnPage(el))) {
+      readable = false;
+      break;
+    }
+  }
+  for (const el of path) readableCache.set(el, readable);
+  return readable;
+}
+
 function walk(node: Node, b: Builder, mode: Mode, range: Range | null) {
-  if (range && !range.intersectsNode(node)) return;
-  if (node.nodeType === Node.TEXT_NODE) {
-    const t = node as Text;
-    const start = range && t === range.startContainer ? range.startOffset : 0;
-    const end = range && t === range.endContainer ? range.endOffset : t.length;
-    const ws = t.parentElement ? getComputedStyle(t.parentElement).whiteSpace : "normal";
-    b.add(t, start, end, ws.startsWith("pre") || ws === "break-spaces");
-    return;
+  const stack: (Node | null)[] = [node]; // null ends a block
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) {
+      b.newline();
+      continue;
+    }
+    if (range && !range.intersectsNode(n)) continue;
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = n as Text;
+      const start = range && t === range.startContainer ? range.startOffset : 0;
+      const end = range && t === range.endContainer ? range.endOffset : t.length;
+      const ws = t.parentElement ? getComputedStyle(t.parentElement).whiteSpace : "normal";
+      b.add(t, start, end, ws === "pre" || ws === "pre-wrap" || ws === "break-spaces", ws.startsWith("pre") || ws === "break-spaces");
+      continue;
+    }
+    if (n.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = n as Element;
+    if (SKIP.has(el.tagName.toUpperCase()) || !visible(el)) continue;
+    if (mode === "page" && skipOnPage(el)) continue;
+    if (el.tagName === "BR") {
+      b.newline();
+      continue;
+    }
+    const display = getComputedStyle(el).display;
+    const block = !display.startsWith("inline") && display !== "contents";
+    if (block) {
+      b.newline();
+      stack.push(null);
+    }
+    for (let c = el.lastChild; c; c = c.previousSibling) stack.push(c);
   }
-  if (node.nodeType !== Node.ELEMENT_NODE) return;
-  const el = node as Element;
-  if (SKIP.has(el.tagName.toUpperCase()) || !visible(el)) return;
-  if (mode === "page" && skipOnPage(el)) return;
-  if (el.tagName === "BR") {
-    b.newline();
-    return;
-  }
-  const display = getComputedStyle(el).display;
-  const block = !display.startsWith("inline") && display !== "contents";
-  if (block) b.newline();
-  for (let c = el.firstChild; c; c = c.nextSibling) walk(c, b, mode, range);
-  if (block) b.newline();
 }
 
 /** Text of <p>-like descendants: how much readable prose an element holds. */
@@ -112,7 +146,7 @@ function proseLength(el: Element): number {
 
 /** The element holding the page's main text. */
 function articleRoot(): Element {
-  const semantic = [...document.querySelectorAll("article, main, [role=main], [itemprop=articleBody]")].filter(visible);
+  const semantic = [...document.querySelectorAll("article, main, [role=main], [itemprop=articleBody]")].filter((el) => readableRoot(el, "page"));
   let best = null as Element | null;
   let bestLen = 0;
   for (const el of semantic) {
@@ -131,7 +165,7 @@ function articleRoot(): Element {
   const score = new Map<Element, number>();
   for (const p of document.querySelectorAll("p")) {
     const len = p.textContent?.trim().length ?? 0;
-    if (len < 40 || !visible(p)) continue;
+    if (len < 40 || !readableRoot(p, "page")) continue;
     const parent = p.parentElement;
     if (parent) score.set(parent, (score.get(parent) ?? 0) + len);
     const grand = parent?.parentElement;
@@ -145,6 +179,7 @@ function articleRoot(): Element {
 
 interface Model {
   b: Builder;
+  jobId?: number;
 }
 let model: Model | null = null;
 
@@ -154,43 +189,51 @@ function focusedFrameOrigin(): string | undefined {
   const el = document.activeElement;
   if (!(el instanceof HTMLIFrameElement)) return undefined;
   try {
-    const origin = new URL(el.src, location.href).origin;
-    return origin !== "null" && origin !== location.origin ? origin : undefined;
+    const url = new URL(el.src, location.href);
+    const origin = url.origin;
+    return (url.protocol === "http:" || url.protocol === "https:") && origin !== location.origin ? origin : undefined;
   } catch {
     return undefined;
   }
 }
 
-function extract(mode: Mode): Extracted {
+function extract(mode: Mode, jobId?: number): Extracted {
   clear();
+  readableCache = new WeakMap();
   const b = new Builder();
   if (mode === "selection") {
     const active = document.activeElement;
-    if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && active.type === "text")) {
+    if (active instanceof HTMLIFrameElement) return { text: "", mapped: false, frame: focusedFrameOrigin() };
+    if (active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && ["text", "search", "url", "tel"].includes(active.type))) {
       model = null;
       const text = active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0);
       return { text, mapped: false };
     }
     const sel = getSelection();
     if (!sel || sel.isCollapsed) return { text: "", mapped: false, frame: focusedFrameOrigin() };
+    let skipped = false;
     for (let i = 0; i < sel.rangeCount; i++) {
       const r = sel.getRangeAt(i);
+      if (!readableRoot(r.commonAncestorContainer, mode)) {
+        skipped = true;
+        continue;
+      }
       walk(r.commonAncestorContainer, b, "selection", r);
       b.newline();
     }
     if (!b.text.trim()) {
       // e.g. a selection inside a shadow root: read it, without highlighting.
       model = null;
-      return { text: sel.toString(), mapped: false };
+      return { text: skipped ? "" : sel.toString(), mapped: false };
     }
   } else {
     const root = articleRoot();
     // Read the page's title too when the article element doesn't include it.
     const h1 = document.querySelector("h1");
-    if (h1 && !root.contains(h1) && visible(h1)) walk(h1, b, mode, null);
-    walk(root, b, mode, null);
+    if (h1 && !root.contains(h1) && readableRoot(h1, mode)) walk(h1, b, mode, null);
+    if (readableRoot(root, mode)) walk(root, b, mode, null);
   }
-  model = { b };
+  model = { b, jobId };
   return { text: b.text, mapped: true };
 }
 
@@ -212,6 +255,8 @@ function position(i: number, dir: 1 | -1): [Text, number] | null {
 
 function show(start: number, end: number, autoScroll: boolean) {
   if (!highlight || !model) return;
+  highlight.clear();
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > model.b.text.length) return;
   const s = position(start, 1);
   const e = position(end - 1, -1);
   if (!s || !e || !s[0].isConnected || !e[0].isConnected) return;
@@ -222,7 +267,6 @@ function show(start: number, end: number, autoScroll: boolean) {
   } catch {
     return; // the page changed under us
   }
-  highlight.clear();
   highlight.add(r);
   // Keep the spoken sentence in view, unless the user is scrolling around.
   if (autoScroll && Date.now() - lastUserScroll > 4000) {
@@ -233,13 +277,14 @@ function show(start: number, end: number, autoScroll: boolean) {
   }
 }
 
-function clear() {
+function clear(release = true) {
   highlight?.clear();
+  if (release) model = null;
 }
 
 declare global {
   interface Window {
-    __kokoroSpeak?: { extract(mode: Mode): Extracted };
+    __kokoroSpeak?: { extract(mode: Mode, jobId?: number): Extracted };
   }
 }
 
@@ -251,8 +296,15 @@ if (!window.__kokoroSpeak) {
     CSS.highlights.set("kokoro-speak", highlight);
   }
   for (const ev of ["wheel", "touchmove", "keydown"]) addEventListener(ev, () => (lastUserScroll = Date.now()), { passive: true });
-  chrome.runtime.onMessage.addListener((m: ToContent) => {
+  addEventListener("pagehide", () => {
+    clear();
+    const m: ToBackground = { target: "background", type: "page-hidden" };
+    void chrome.runtime.sendMessage(m).catch(() => {});
+  });
+  chrome.runtime.onMessage.addListener((m: ToContent, sender) => {
+    if (!m || sender.id !== chrome.runtime.id || sender.tab || sender.url !== chrome.runtime.getURL("background.js")) return;
+    if (m.jobId !== model?.jobId) return;
     if (m.type === "kokoro:highlight") show(m.start, m.end, m.autoScroll);
-    else if (m.type === "kokoro:clear") clear();
+    else if (m.type === "kokoro:clear") clear(m.release ?? true);
   });
 }

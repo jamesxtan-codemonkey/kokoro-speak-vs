@@ -18,9 +18,11 @@ const CHROME = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(CHROME);
 const TEST = process.argv.includes("--test");
 const ZIP = process.argv.includes("--zip");
+if (TEST && ZIP) throw new Error("Test builds cannot be packaged for the Chrome Web Store.");
 const OUT = join(CHROME, TEST ? "dist-test" : "dist");
 const MODEL = join(ROOT, "models", "kokoro-speak");
 const WEB_DECODER = join(ROOT, "models", "kokoro-speak-web", "decoder.onnx");
+const UPCAST = join(ROOT, "tools", "convert", "upcast_decoder.py");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
 function link(from, to) {
@@ -38,11 +40,11 @@ if (!existsSync(join(MODEL, "frontend.onnx"))) {
   console.error("[chrome] models/kokoro-speak is missing. Run `npm run prepare-model` first.");
   process.exit(1);
 }
-if (!existsSync(WEB_DECODER)) {
+if (!existsSync(WEB_DECODER) || statSync(WEB_DECODER).mtimeMs < Math.max(statSync(join(MODEL, "decoder.onnx")).mtimeMs, statSync(UPCAST).mtimeMs)) {
   const python = join(ROOT, ".venv-convert", process.platform === "win32" ? "Scripts\\python.exe" : "bin/python");
   console.log("[chrome] converting the decoder for WebGPU (fp32 compute)…");
   mkdirSync(dirname(WEB_DECODER), { recursive: true });
-  execFileSync(python, [join(ROOT, "tools", "convert", "upcast_decoder.py"), join(MODEL, "decoder.onnx"), WEB_DECODER], { stdio: "inherit" });
+  execFileSync(python, [UPCAST, join(MODEL, "decoder.onnx"), WEB_DECODER], { stdio: "inherit" });
 }
 
 // 2. Code.

@@ -14,6 +14,8 @@ distance down to 2.2-2.3 dB, the same as WASM.
 chrome/build.mjs runs this when the web decoder is missing.
 """
 import sys
+import os
+import tempfile
 
 import onnx
 from onnx import TensorProto, helper, numpy_helper
@@ -55,7 +57,15 @@ def main(src, dst):
             v.type.tensor_type.elem_type = F32
 
     onnx.checker.check_model(m)
-    onnx.save(m, dst)
+    # Never leave a truncated file that the next build could reuse as a model.
+    fd, tmp = tempfile.mkstemp(suffix=".onnx", dir=os.path.dirname(os.path.abspath(dst)))
+    os.close(fd)
+    try:
+        onnx.save(m, tmp)
+        os.replace(tmp, dst)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     print(f"upcast {counts} -> {dst}")
 
 

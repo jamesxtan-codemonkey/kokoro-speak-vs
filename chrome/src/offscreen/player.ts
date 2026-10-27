@@ -34,13 +34,14 @@ export class Player {
     // "playback" asks for bigger buffers (TTS doesn't need low latency); the
     // context runs at the device rate and each clip is resampled on its way in.
     this.ctx ??= new AudioContext({ latencyHint: "playback" });
-    if (this.paused) void this.ctx.suspend();
-    else if (this.ctx.state === "suspended") void this.ctx.resume();
+    if (this.paused) void this.ctx.suspend().catch(() => {});
+    else void this.ctx.resume().catch(() => {});
     const buf = this.ctx.createBuffer(1, samples.length, this.rate);
     buf.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
     const node = this.ctx.createBufferSource();
     node.buffer = buf;
     node.connect(this.ctx.destination);
+    node.onended = () => node.disconnect();
     const t0 = Math.max(this.ctx.currentTime + 0.05, this.next);
     node.start(t0);
     this.next = t0 + buf.duration;
@@ -60,12 +61,12 @@ export class Player {
 
   pause() {
     this.paused = true;
-    void this.ctx?.suspend();
+    void this.ctx?.suspend().catch(() => {});
   }
 
   resume() {
     this.paused = false;
-    void this.ctx?.resume();
+    void this.ctx?.resume().catch(() => {});
   }
 
   stop() {
@@ -75,18 +76,19 @@ export class Player {
       } catch {
         /* not started yet */
       }
+      c.node.disconnect();
     }
     this.clips = [];
     this.current = null;
     this.next = 0;
     this.paused = false;
-    void this.ctx?.resume();
     this.finish();
   }
 
   private finish() {
     clearInterval(this.timer);
     this.timer = undefined;
+    void this.ctx?.suspend().catch(() => {});
     for (const r of this.idle.splice(0)) r();
   }
 
@@ -98,7 +100,7 @@ export class Player {
 
   private tick() {
     const ctx = this.ctx;
-    if (!ctx) return;
+    if (!ctx || this.paused) return;
     const t = this.heardTime(ctx);
     // Everything queued has played. (Checked first: a long WASM generation can
     // block this page for over a second between ticks.)

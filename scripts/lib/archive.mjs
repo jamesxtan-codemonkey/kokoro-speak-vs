@@ -2,7 +2,19 @@
 // external `tar`/`zip`/`unzip`, whose availability and flags differ across
 // Windows/macOS/Linux shells.
 
-import { crc32, deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
+import { deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
+import * as zlib from "node:zlib";
+
+// zlib.crc32 was added in Node 20.15; packaging also supports earlier Node 20.
+const CRC_TABLE = zlib.crc32 ? null : Uint32Array.from({ length: 256 }, (_, n) => {
+  for (let i = 0; i < 8; i++) n = (n >>> 1) ^ ((n & 1) ? 0xedb88320 : 0);
+  return n >>> 0;
+});
+export const crc32 = zlib.crc32 ?? ((data) => {
+  let crc = 0xffffffff;
+  for (const byte of data) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff];
+  return (crc ^ 0xffffffff) >>> 0;
+});
 
 /** Regular files in a .tar.gz buffer → [{ name, data }]. Handles ustar prefixes
  *  and GNU long names ('L'), which is all prebuild tarballs use. */

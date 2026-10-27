@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { chunkSpans, chunkText, normalizeMapped, preNormalize, deterministic, MappedText } = require("./.core.cjs");
+const { chunkSpans, chunkText, normalizeMapped, preNormalize, deterministic, MappedText, anthropicCall } = require("./.core.cjs");
 
 const PARAGRAPH =
   "Every case figure reuses the stage column on the left, title for title from Figure 1 of the architecture page. A case is a column to its right. A data item sits in the row of the stage it enters; the case's flow runs down the column in the accent, labelled where something happens; a stage the case does not run is written as such; and the outcome box at the foot carries the outcome, its reason, rule id, review reasons, and what the trace records, in the use case's words.";
@@ -78,4 +78,21 @@ test("MappedText.replace substitutes like String.replace", () => {
     ["abc", /b/g, "[$`|$']"],
   ];
   for (const [s, re, to] of cases) assert.equal(MappedText.of(s).replace(re, to).text, s.replace(re, to), `${s} ${re} ${to}`);
+});
+
+test("Anthropic calls keep the configured key on the official API host", async (t) => {
+  const previous = process.env.ANTHROPIC_BASE_URL;
+  process.env.ANTHROPIC_BASE_URL = "https://unrelated.example/";
+  t.after(() => {
+    if (previous === undefined) delete process.env.ANTHROPIC_BASE_URL;
+    else process.env.ANTHROPIC_BASE_URL = previous;
+  });
+  let called;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    called = String(url);
+    return new Response(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: "one dollar" }] }), { headers: { "content-type": "application/json" } });
+  });
+  const result = await anthropicCall({ apiKey: "test-key", model: "test", timeoutMs: 1000 })("Rewrite", "$1", 256);
+  assert.equal(result, "one dollar");
+  assert.equal(new URL(called).origin, "https://api.anthropic.com");
 });

@@ -7,6 +7,7 @@ import {
   aiNormalize,
   anthropicCall,
   chunkSpans,
+  chunkText,
   normalizeMapped,
   preNormalize,
   SAMPLE_RATE,
@@ -25,11 +26,13 @@ const player = new Player(SAMPLE_RATE);
 let engine: Engine | null = null;
 let engineDevice: Device | null = null;
 let engineNote: string | undefined;
-let loading: Promise<Engine> | null = null;
 let job: Job | null = null;
 let token = 0;
 let paused = false;
+let preparing = false;
 let state: PlayState = { status: "idle" };
+let speaking = Promise.resolve();
+let rewriting: AbortController | null = null;
 
 const send = (m: ToBackground) => chrome.runtime.sendMessage(m).catch(() => {});
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -41,7 +44,7 @@ function setState(s: PlayState) {
   void send({ target: "background", type: "state", state: s });
   clearTimeout(idleTimer);
   if (s.status === "idle" || s.status === "error") {
-    idleTimer = setTimeout(() => void send({ target: "background", type: "idle-timeout" }), IDLE_UNLOAD_MS);
+    idleTimer = setTimeout(() => void send({ target: "background", type: "idle-timeout", jobId: s.jobId }), IDLE_UNLOAD_MS);
   }
 }
 
@@ -53,36 +56,31 @@ player.onClip = (c) => {
 
 async function getEngine(device: Device): Promise<Engine> {
   if (engine && engineDevice === device) return engine;
-  if (!loading) {
-    loading = (async () => {
-      await engine?.release();
-      engine = null;
-      const r = await loadPreferred(device);
-      engine = r.engine;
-      engineDevice = device;
-      engineNote = r.note;
-      return r.engine;
-    })().finally(() => (loading = null));
-  }
-  return loading;
+  const prev = engine;
+  engine = null;
+  await prev?.release();
+  const r = await loadPreferred(device);
+  engine = r.engine;
+  engineDevice = device;
+  engineNote = r.note;
+  return r.engine;
 }
 
 /** The GPU failed mid-run (e.g. device lost after sleep): reload on the CPU. */
 async function fallBackToWasm(err: unknown): Promise<Engine> {
   console.warn("[kokoro] WebGPU failed mid-run, switching to WASM:", err);
-  await engine?.release().catch(() => {});
+  const prev = engine;
+  engine = null;
+  await prev?.release().catch(() => {});
   engine = await loadEngine("wasm");
   engineNote = `GPU failed (${errText(err)}); using CPU.`;
   return engine;
 }
 
-async function speak(j: Job) {
-  const my = ++token;
-  job = j;
-  player.stop();
-  paused = false;
+async function speak(j: Job, my: number) {
+  if (my !== token) return;
   try {
-    const s = j.settings;
+    const s = job!.settings;
     // Chunk the offline normalization, so sentence breaks fall where they do
     // when spoken, and map each chunk back to the text it came from.
     const mt = normalizeMapped(j.text, s.normMode, s);
@@ -91,34 +89,49 @@ async function speak(j: Job) {
       finish(my);
       return;
     }
-    if (!engine || engineDevice !== s.device) setState({ status: "loading", jobId: j.id });
     let e = await getEngine(s.device);
     if (my !== token) return;
+    preparing = false;
 
-    const ai = s.normMode === "ai";
-    const note = j.note ?? (ai && !j.apiKey ? "AI rewriting needs an API key (Options); using built-in rules." : engineNote);
+    const note = j.note ?? (job!.settings.normMode === "ai" && !job!.apiKey ? "AI rewriting needs an API key (Options); using built-in rules." : engineNote);
     setState({ status: paused ? "paused" : "speaking", jobId: j.id, backend: backendLabel(e.backend), message: note, needsAccess: j.needsAccess, index: 0, total: chunks.length });
 
     for (const c of chunks) {
-      while (player.bufferedSec() > LOOKAHEAD_SEC && my === token) await sleep(200);
+      while ((paused || player.bufferedSec() > LOOKAHEAD_SEC) && my === token) await sleep(200);
       if (my !== token) return;
       // Settings can change mid-job (voice, speed); later chunks pick them up.
       const cur = job!.settings;
-      const call = ai && job!.apiKey ? anthropicCall({ apiKey: job!.apiKey, model: cur.model, timeoutMs: cur.timeoutMs }) : null;
-      const text = call ? await aiNormalize(preNormalize(j.text.slice(...c.src), cur), cur.rules, call) : c.text;
+      const raw = j.text.slice(...c.src);
+      // A replacement can span several chunks (e.g. a long **bold** passage).
+      // Only reuse its source when it represents this entire chunk exactly.
+      const wholeSource = (c.index === 0 || chunks[c.index - 1].src[1] <= c.src[0]) &&
+        (c.index === chunks.length - 1 || c.src[1] <= chunks[c.index + 1].src[0]) &&
+        normalizeMapped(raw, s.normMode, s).text.replace(/\s+/g, " ") === c.text.replace(/\s+/g, " ");
+      const local = () => wholeSource && job!.settings !== s ? normalizeMapped(raw, job!.settings.normMode, job!.settings).text : c.text;
+      rewriting = new AbortController();
+      const call = cur.normMode === "ai" && job!.apiKey ? anthropicCall({ apiKey: job!.apiKey, model: cur.model, timeoutMs: cur.timeoutMs, signal: rewriting.signal }) : null;
+      let text = call ? await aiNormalize(wholeSource ? preNormalize(raw, cur) : c.text, cur.rules, call) : local();
       if (my !== token) return;
-      let audio: Float32Array;
-      try {
-        audio = await e.generate(text, cur.voice, cur.speed);
-      } catch (err) {
-        if (e.backend !== "webgpu") throw err;
-        e = await fallBackToWasm(err);
+      if (rewriting.signal.aborted) text = local();
+      rewriting = null;
+      // AI/user rules can expand a short chunk beyond the model's token cap.
+      for (const part of chunkText(text)) {
+        while ((paused || player.bufferedSec() > LOOKAHEAD_SEC) && my === token) await sleep(200);
         if (my !== token) return;
-        setState({ ...state, backend: backendLabel(e.backend), message: engineNote });
-        audio = await e.generate(text, cur.voice, cur.speed);
+        let audio: Float32Array;
+        try {
+          audio = await e.generate(part, cur.voice, cur.speed);
+        } catch (err) {
+          if (my !== token) return;
+          if (e.backend !== "webgpu") throw err;
+          e = await fallBackToWasm(err);
+          if (my !== token) return;
+          setState({ ...state, backend: backendLabel(e.backend), message: engineNote });
+          audio = await e.generate(part, cur.voice, cur.speed);
+        }
+        if (my !== token) return;
+        if (audio.length) player.enqueue(audio, { index: c.index, total: chunks.length, start: c.src[0], end: c.src[1] });
       }
-      if (my !== token) return;
-      player.enqueue(audio, { index: c.index, total: chunks.length, start: c.src[0], end: c.src[1] });
     }
     await player.drained();
     finish(my);
@@ -126,24 +139,40 @@ async function speak(j: Job) {
     if (my !== token) return;
     console.error("[kokoro]", err);
     player.stop();
-    setState({ status: "error", message: `Couldn't speak: ${errText(err)}` });
+    job = null;
+    rewriting = null;
+    setState({ status: "error", jobId: j.id, message: `Couldn't speak: ${errText(err)}` });
     void send({ target: "background", type: "done", jobId: j.id });
   }
 }
 
 function finish(my: number) {
   if (my !== token || !job) return;
-  void send({ target: "background", type: "done", jobId: job.id });
+  const jobId = job.id;
+  void send({ target: "background", type: "done", jobId });
   job = null;
-  setState({ status: "idle", backend: engine ? backendLabel(engine.backend) : undefined });
+  setState({ status: "idle", jobId, backend: engine ? backendLabel(engine.backend) : undefined });
 }
 
-chrome.runtime.onMessage.addListener((m: ToOffscreen) => {
-  if (m.target !== "offscreen") return;
+chrome.runtime.onMessage.addListener((m: ToOffscreen, sender, reply) => {
+  if (!m || m.target !== "offscreen" || sender.id !== chrome.runtime.id || sender.tab || sender.url !== chrome.runtime.getURL("background.js")) return;
   switch (m.type) {
-    case "speak":
-      void speak(m.job);
+    case "get-state":
+      reply(state);
+      return;
+    case "speak": {
+      const my = ++token;
+      rewriting?.abort();
+      job = m.job;
+      player.stop();
+      paused = !!m.job.paused;
+      preparing = true;
+      if (paused) player.pause();
+      setState({ status: paused ? "paused" : "loading", jobId: m.job.id });
+      // A cancelled inference must finish before another uses/releases sessions.
+      speaking = speaking.then(() => speak(m.job, my));
       break;
+    }
     case "pause":
       if (!job) break;
       paused = true;
@@ -154,18 +183,24 @@ chrome.runtime.onMessage.addListener((m: ToOffscreen) => {
       if (!job) break;
       paused = false;
       player.resume();
-      setState({ ...state, status: state.status === "paused" ? "speaking" : state.status });
+      setState({ ...state, status: preparing ? "loading" : "speaking" });
       break;
     case "stop":
       token++;
+      rewriting?.abort();
       job = null;
       player.stop();
-      setState({ status: "idle", backend: engine ? backendLabel(engine.backend) : undefined });
+      setState({ status: "idle", jobId: state.jobId, backend: engine ? backendLabel(engine.backend) : undefined });
       break;
     case "settings":
-      if (job) job = { ...job, settings: m.settings, apiKey: m.apiKey };
+      if (job) {
+        rewriting?.abort();
+        job = { ...job, settings: m.settings, apiKey: m.apiKey };
+      }
       break;
   }
+  reply(true);
 });
 
+setState(state);
 void send({ target: "background", type: "offscreen-ready" });

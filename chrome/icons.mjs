@@ -1,6 +1,7 @@
 // Draws the extension icon (a blue rounded square with white sound-wave bars)
 // as PNGs, so the repo has no binary icon files to keep in sync.
-import { crc32, deflateSync } from "node:zlib";
+import { deflateSync } from "node:zlib";
+import { crc32 } from "../scripts/lib/archive.mjs";
 
 const BG = [26, 115, 232]; // #1a73e8
 const FG = [255, 255, 255];

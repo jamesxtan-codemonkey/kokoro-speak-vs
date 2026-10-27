@@ -362,6 +362,7 @@ export interface ApiOptions {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
 /** An LlmCall through the Anthropic API with the user's own key. Runs in Node
@@ -370,6 +371,7 @@ export interface ApiOptions {
 export function anthropicCall(o: ApiOptions): LlmCall {
   const client = new Anthropic({
     apiKey: o.apiKey,
+    baseURL: "https://api.anthropic.com",
     timeout: o.timeoutMs,
     maxRetries: 0,
     // The user's own key in their own browser (the Chrome extension).
@@ -382,7 +384,7 @@ export function anthropicCall(o: ApiOptions): LlmCall {
         max_tokens: maxTokens,
         system,
         messages: [{ role: "user", content: user }],
-      });
+      }, { signal: o.signal });
       // Only a clean completion is usable; refusal or a max_tokens cut would
       // return text truncated mid-sentence — fall back to deterministic instead.
       if (res.stop_reason !== "end_turn") return null;

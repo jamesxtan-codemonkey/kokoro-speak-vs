@@ -89,7 +89,7 @@ async function init() {
     void chrome.runtime.openOptionsPage();
   };
 
-  render(((await chrome.storage.session.get("state")).state as PlayState) ?? { status: "idle" });
+  render((await send({ target: "background", type: "get-state" })) ?? { status: "idle" });
   chrome.storage.session.onChanged.addListener((c) => {
     if (c.state?.newValue) render(c.state.newValue as PlayState);
   });

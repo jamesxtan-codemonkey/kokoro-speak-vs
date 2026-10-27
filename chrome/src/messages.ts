@@ -19,6 +19,7 @@ export interface PlayState {
   /** An origin whose embedded frame holds the selection, which the extension
    *  needs permission to read; the popup offers to request it. */
   needsAccess?: string;
+  expiresAt?: number;
 }
 
 /** The text being spoken and where its highlights go. */
@@ -26,6 +27,8 @@ export interface JobInfo {
   id: number;
   tabId: number;
   frameId: number;
+  documentId?: string;
+  started?: boolean;
   /** True when the text maps back to the page, so it can be highlighted. */
   mapped: boolean;
 }
@@ -35,6 +38,7 @@ export interface Job {
   text: string;
   settings: Settings;
   apiKey: string;
+  paused?: boolean;
   /** Shown while speaking, e.g. why there's no highlighting. */
   note?: string;
   needsAccess?: string;
@@ -43,22 +47,25 @@ export interface Job {
 export type ToBackground = { target: "background" } & (
   | { type: "speak-selection" | "read-page"; tabId: number }
   | { type: "pause-toggle" | "stop" }
+  | { type: "get-state" }
+  | { type: "page-hidden" }
   | { type: "offscreen-ready" }
   | { type: "state"; state: PlayState }
   | { type: "progress"; jobId: number; index: number; total: number; start: number; end: number }
   | { type: "done"; jobId: number }
-  | { type: "idle-timeout" }
+  | { type: "idle-timeout"; jobId?: number }
 );
 
 export type ToOffscreen = { target: "offscreen" } & (
   | { type: "speak"; job: Job }
   | { type: "pause" | "resume" | "stop" }
+  | { type: "get-state" }
   | { type: "settings"; settings: Settings; apiKey: string }
 );
 
 export type ToContent =
-  | { type: "kokoro:highlight"; start: number; end: number; autoScroll: boolean }
-  | { type: "kokoro:clear" };
+  | { type: "kokoro:highlight"; jobId: number; start: number; end: number; autoScroll: boolean }
+  | { type: "kokoro:clear"; jobId: number; release?: boolean };
 
 /** What the content script found to read. */
 export interface Extracted {

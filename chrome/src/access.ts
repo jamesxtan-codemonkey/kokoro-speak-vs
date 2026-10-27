@@ -14,7 +14,7 @@ export interface AccessRequest {
 export function accessRequest(origin: string): AccessRequest {
   const u = new URL(origin);
   const [first, ...rest] = u.hostname.split(".");
-  if (rest.length >= 2 && /^[0-9a-f-]{16,}$/i.test(first)) {
+  if (rest.join(".") === "frame.claudeusercontent.com" && /^[0-9a-f-]{16,}$/i.test(first)) {
     return { pattern: `${u.protocol}//*.${rest.join(".")}/*`, label: rest.join(".") };
   }
   return { pattern: `${origin}/*`, label: u.host };

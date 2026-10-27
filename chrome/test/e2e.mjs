@@ -54,17 +54,7 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 
 const profile = mkdtempSync(join(tmpdir(), "kokoro-e2e-"));
-const ctx = await chromium.launchPersistentContext(profile, {
-  executablePath: chromePath(),
-  headless: false,
-  viewport: { width: 1280, height: 800 },
-  args: [
-    `--disable-extensions-except=${DIST}`,
-    `--load-extension=${DIST}`,
-    "--disable-features=DisableLoadExtensionCommandLineSwitch",
-    ...(process.env.AUDIBLE ? [] : ["--mute-audio"]),
-  ],
-});
+let ctx;
 
 let failures = 0;
 async function check(name, fn) {
@@ -79,6 +69,17 @@ async function check(name, fn) {
 }
 
 try {
+  ctx = await chromium.launchPersistentContext(profile, {
+    executablePath: chromePath(),
+    headless: false,
+    viewport: { width: 1280, height: 800 },
+    args: [
+      `--disable-extensions-except=${DIST}`,
+      `--load-extension=${DIST}`,
+      "--disable-features=DisableLoadExtensionCommandLineSwitch",
+      ...(process.env.AUDIBLE ? [] : ["--mute-audio"]),
+    ],
+  });
   const sw = ctx.serviceWorkers()[0] ?? (await ctx.waitForEvent("serviceworker"));
   const extId = new URL(sw.url()).host;
   const page = await ctx.newPage();
@@ -279,9 +280,12 @@ try {
     await page.evaluate(() => document.getElementById("popup-shot").remove());
   });
 } finally {
-  await ctx.close();
-  server.close();
-  rmSync(profile, { recursive: true, force: true });
+  try {
+    await ctx?.close();
+  } finally {
+    server.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : `\nall checks passed; screenshots in ${OUT}`);
