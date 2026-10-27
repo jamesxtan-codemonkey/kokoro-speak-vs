@@ -2,7 +2,7 @@
   "name": "kokoro-speak-vs",
   "displayName": "Kokoro Speak",
   "description": "Read text aloud in VS Code with the official Kokoro-82M voice: natural, fully offline, and GPU-accelerated on Windows.",
-  "version": "0.0.8",
+  "version": "0.1.0",
   "publisher": "JamesTan",
   "engines": {
     "vscode": "^1.90.0"
