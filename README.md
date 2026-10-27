@@ -114,23 +114,9 @@ Kokoro Speak uses the official
 [Kokoro-82M v1.0](https://huggingface.co/hexgrad/Kokoro-82M) model by hexgrad
 (Apache-2.0), included in the extension. It's converted from the original
 weights, and the conversion is only accepted if its output matches the official
-model, so it sounds like the original, not like an approximation. The details, including how
-it compares with other conversions, are in the
-[developer guide](docs/DEVELOPMENT.md#the-model).
-
-## For AI agents (MCP)
-
-Kokoro Speak also comes as a standalone [MCP](https://modelcontextprotocol.io)
-server, so agents such as Claude Code, Codex or Claude Desktop can speak their
-replies aloud. See [docs/mcp-voice.md](docs/mcp-voice.md).
-
-## Contributing
-
-Building, packaging and the model conversion are described in the
-[developer guide](docs/DEVELOPMENT.md). Source:
-[github.com/jamesxtan-codemonkey/kokoro-speak-vs](https://github.com/jamesxtan-codemonkey/kokoro-speak-vs)
+model, so it sounds like the original, not like an approximation.
 
 ## License
 
-The extension is [MIT](LICENSE). The Kokoro-82M model and voices are
-[Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M).
+The extension is licensed under MIT. The Kokoro-82M model and voices are
+licensed under [Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M).
