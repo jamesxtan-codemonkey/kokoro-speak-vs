@@ -9,7 +9,7 @@ import {
   describeBackend,
   DevicePref,
 } from "./synth";
-import { VOICES, isVoice } from "./voices";
+import { VOICES, isVoice } from "./core/voices";
 import {
   normalize,
   NormMode,

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kokoro speaks the web</title>
+  <style>
+    body { font: 18px/1.6 Georgia, serif; margin: 0; color: #222; background: #fdfcf8; }
+    .site { background: #2b2d42; color: #fff; padding: 14px 32px; }
+    .site a { color: #fff; margin-right: 18px; text-decoration: none; font: 15px system-ui, sans-serif; }
+    .wrap { display: flex; gap: 40px; max-width: 1100px; margin: 0 auto; padding: 32px; }
+    article { flex: 1; max-width: 680px; }
+    aside { width: 220px; font: 14px system-ui, sans-serif; color: #666; border-left: 1px solid #ddd; padding-left: 20px; }
+    h1 { font-size: 34px; line-height: 1.2; }
+    footer { text-align: center; color: #888; font: 13px system-ui, sans-serif; padding: 32px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  </style>
+</head>
+<body>
+  <header class="site"><nav><a href="#">Home</a><a href="#">Articles</a><a href="#">About us</a></nav></header>
+  <div class="wrap">
+    <main>
+      <article>
+        <h1>Kokoro speaks the web</h1>
+        <p id="p1">The quick brown fox jumps over the lazy dog. Revenue hit $10B in Q4 2025, e.g. more than ever.<sup class="reference">[1]</sup></p>
+        <p id="p2">Every case figure reuses the stage column on the left, title for title from Figure 1 of the architecture page. A case is a column to its right. A data item sits in the row of the stage it enters; the case's flow runs down the column in the accent, labelled where something happens; a stage the case does not run is written as such; and the outcome box at the foot carries the outcome, its reason, rule id, review reasons, and what the trace records, in the use case's words.</p>
+        <ul>
+          <li>Reads the main article and skips the menus</li>
+          <li>Highlights each sentence as it is spoken</li>
+        </ul>
+        <p style="display: none">Hidden text must never be read.</p>
+        <span class="sr-only">Screen reader only text.</span>
+        <p id="p3">Text with <a href="#">a link</a> and <em>some emphasis</em> reads as one sentence. Open weights make local speech synthesis possible. She sells seashells by the seashore on a sunny morning.</p>
+      </article>
+    </main>
+    <aside>Related reading: sidebar text that should not be read.</aside>
+  </div>
+  <footer>Copyright footer text.</footer>
+</body>
+</html>

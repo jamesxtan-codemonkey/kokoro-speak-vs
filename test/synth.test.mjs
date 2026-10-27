@@ -55,6 +55,27 @@ test("chunkText word-packs an over-long single sentence", () => {
   assert.equal(wordCount, 120);
 });
 
+test("chunkText cuts an over-long sentence at clause breaks, not mid-phrase", () => {
+  // 330 chars; word-packing alone cut it at "the outcome, its | reason", which
+  // played as an audible pause between "its" and "reason".
+  const text =
+    "A data item sits in the row of the stage it enters; the case's flow runs down the column in the accent, labelled where something happens; a stage the case does not run is written as such; and the outcome box at the foot carries the outcome, its reason, rule id, review reasons, and what the trace records, in the use case's words.";
+  const chunks = chunkText(text);
+  assert.equal(chunks.join(" "), text);
+  for (const c of chunks) assert.ok(c.length <= 250);
+  for (const c of chunks.slice(0, -1)) assert.match(c, /;$/, `seam not at a clause break: …${c.slice(-20)}`);
+  assert.ok(chunks.some((c) => c.includes("its reason")));
+});
+
+test("chunkText falls back to commas when a clause has no stronger break", () => {
+  const clause = "one two three four five six seven eight nine ten, ";
+  const text = clause.repeat(8).trim() + "."; // ~400 chars, commas only
+  const chunks = chunkText(text);
+  assert.ok(chunks.length > 1);
+  assert.equal(chunks.join(" "), text);
+  for (const c of chunks.slice(0, -1)) assert.match(c, /,$/);
+});
+
 test("chunkText handles empty/whitespace input", () => {
   assert.deepEqual(chunkText(""), []);
   assert.deepEqual(chunkText("   \n  "), []);

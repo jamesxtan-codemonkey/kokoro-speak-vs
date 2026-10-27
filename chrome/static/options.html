@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kokoro Speak options</title>
+  <link rel="stylesheet" href="ui.css" />
+</head>
+<body class="options">
+  <main>
+    <header>
+      <img src="icons/icon-48.png" width="32" height="32" alt="" />
+      <h1>Kokoro Speak</h1>
+      <span id="saved" role="status" aria-live="polite"></span>
+    </header>
+
+    <section>
+      <h2>Voice</h2>
+      <div class="grid2">
+        <label class="field"><span>Voice</span><select id="voice"></select></label>
+        <label class="field"><span>Speed <output id="speed-out"></output></span>
+          <input id="speed" type="range" min="0.5" max="2" step="0.05" /></label>
+      </div>
+      <label class="field"><span>Run the model on</span>
+        <select id="device">
+          <option value="auto">Automatic: the GPU when available, else the CPU</option>
+          <option value="webgpu">GPU (WebGPU)</option>
+          <option value="wasm">CPU (WebAssembly)</option>
+        </select>
+      </label>
+    </section>
+
+    <section>
+      <h2>Reading</h2>
+      <label class="check"><input id="highlight" type="checkbox" /> Highlight the sentence being spoken</label>
+      <label class="check"><input id="autoScroll" type="checkbox" /> Scroll to keep it in view</label>
+      <p class="help">Shortcuts: <span id="shortcuts"></span>
+        <a href="#" id="edit-shortcuts">Change shortcuts</a></p>
+    </section>
+
+    <section>
+      <h2>Pronunciation</h2>
+      <p class="help">How text is rewritten before it's spoken, for example "$10B" as "10 billion dollars".</p>
+      <div class="radio" role="radiogroup">
+        <label><input type="radio" name="normMode" value="deterministic" /> <span><b>Built-in rules</b>: money, percentages, versions, quarters, common abbreviations and emoji. Works offline.</span></label>
+        <label><input type="radio" name="normMode" value="ai" /> <span><b>AI rewriting</b>: Claude rewrites anything with numbers or symbols, following the rules below, with the built-in rules as a fallback. Sends that text to Anthropic.</span></label>
+        <label><input type="radio" name="normMode" value="off" /> <span><b>Off</b>: read the text exactly as written.</span></label>
+      </div>
+
+      <h2 style="margin-top: 16px">Your pronunciations</h2>
+      <p class="help">Applied in every mode except Off, before anything else.</p>
+      <table id="replacements"></table>
+      <button id="add-replacement" type="button">Add a pronunciation</button>
+      <label class="field"><span>Spell these out letter by letter (comma-separated, e.g. API, LFP)</span>
+        <input id="spellOut" type="text" spellcheck="false" /></label>
+    </section>
+
+    <section id="ai-section">
+      <h2>AI rewriting</h2>
+      <p class="help">Uses your own Anthropic API key, stored only on this device and sent only to api.anthropic.com.
+        Only text that contains numbers or symbols is sent, a sentence at a time, as it's about to be read.</p>
+      <label class="field"><span>API key</span>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" /></label>
+      <label class="field"><span>Model</span><input id="model" type="text" spellcheck="false" /></label>
+      <label class="field"><span>Rules <a href="#" id="reset-rules">Reset to defaults</a></span>
+        <textarea id="rules" rows="12" spellcheck="false"></textarea></label>
+      <div class="row">
+        <button id="test-ai" type="button">Test</button>
+        <span class="help" style="margin: 0">Rewrites "Revenue hit $3.5M in Q4 2025, up ~20%."</span>
+      </div>
+      <p id="test-result" class="result" hidden></p>
+    </section>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

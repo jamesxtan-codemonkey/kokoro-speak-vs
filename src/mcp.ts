@@ -18,7 +18,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { Speaker } from "./speaker";
 import { configureModel, DevicePref } from "./synth";
-import { VOICES, DEFAULT_VOICE, describeVoice } from "./voices";
+import { VOICES, DEFAULT_VOICE, describeVoice } from "./core/voices";
 // Single source of truth for the version (inlined from package.json at build).
 import { version } from "../package.json";
 

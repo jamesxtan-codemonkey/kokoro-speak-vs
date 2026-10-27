@@ -1,7 +1,20 @@
-// Minimal archive readers for the packaging scripts — no external `tar`/`unzip`,
-// whose availability and flags differ across Windows/macOS/Linux shells.
+// Minimal archive readers (and a zip writer) for the packaging scripts — no
+// external `tar`/`zip`/`unzip`, whose availability and flags differ across
+// Windows/macOS/Linux shells.
 
-import { gunzipSync, inflateRawSync } from "node:zlib";
+import { deflateRawSync, gunzipSync, inflateRawSync } from "node:zlib";
+import * as zlib from "node:zlib";
+
+// zlib.crc32 was added in Node 20.15; packaging also supports earlier Node 20.
+const CRC_TABLE = zlib.crc32 ? null : Uint32Array.from({ length: 256 }, (_, n) => {
+  for (let i = 0; i < 8; i++) n = (n >>> 1) ^ ((n & 1) ? 0xedb88320 : 0);
+  return n >>> 0;
+});
+export const crc32 = zlib.crc32 ?? ((data) => {
+  let crc = 0xffffffff;
+  for (const byte of data) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff];
+  return (crc ^ 0xffffffff) >>> 0;
+});
 
 /** Regular files in a .tar.gz buffer → [{ name, data }]. Handles ustar prefixes
  *  and GNU long names ('L'), which is all prebuild tarballs use. */
@@ -66,4 +79,50 @@ export function readZip(buf) {
     });
   }
   return entries;
+}
+
+/** A .zip of [{ name, data }] (no zip64: under 4 GB). Already-compressed
+ *  formats are stored; the rest is deflated. Timestamps are fixed, so the same
+ *  inputs give the same archive. */
+export function writeZip(files) {
+  const DOS_DATE = (1 << 5) | 1; // 1980-01-01
+  const locals = [];
+  const central = [];
+  let offset = 0;
+  for (const { name, data } of files) {
+    const store = /\.(onnx|wasm|bin|png|zip)$/i.test(name);
+    const body = store ? data : deflateRawSync(data, { level: 9 });
+    const fname = Buffer.from(name, "utf8");
+    const crc = crc32(data);
+    const fields = (h, at) => {
+      h.writeUInt16LE(20, at); // version needed
+      h.writeUInt16LE(0x0800, at + 2); // UTF-8 names
+      h.writeUInt16LE(store ? 0 : 8, at + 4);
+      h.writeUInt16LE(0, at + 6); // time
+      h.writeUInt16LE(DOS_DATE, at + 8);
+      h.writeUInt32LE(crc, at + 10);
+      h.writeUInt32LE(body.length, at + 14);
+      h.writeUInt32LE(data.length, at + 18);
+      h.writeUInt16LE(fname.length, at + 22);
+    };
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    fields(local, 4);
+    locals.push(local, fname, body);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);
+    cen.writeUInt16LE(20, 4); // version made by
+    fields(cen, 6);
+    cen.writeUInt32LE(offset, 42);
+    central.push(cen, fname);
+    offset += local.length + fname.length + body.length;
+  }
+  const cdir = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cdir.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cdir, end]);
 }
