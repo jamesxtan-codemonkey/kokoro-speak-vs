@@ -30,7 +30,8 @@ macOS. Elsewhere, set `CHROME_PATH`. Audio is muted unless `AUDIBLE=1`. It
 checks speaking a selection with highlights in order, the CPU path,
 article extraction, pause/resume/stop, stopping on reload, restricted pages,
 the AI-rewriting round trip to Anthropic (with a deliberately invalid key),
-and the popup. It also saves Web Store screenshots to `chrome/test/out/`.
+and the popup. It also saves Web Store screenshots and the promo tiles (from
+`chrome/store/promo-*.html`) to `chrome/test/out/`.
 
 ## How it works
 

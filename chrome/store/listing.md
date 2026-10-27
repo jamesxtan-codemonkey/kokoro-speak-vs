@@ -41,6 +41,15 @@ Copy these into the Developer Dashboard when uploading
 2. `screenshot-popup.png`: the toolbar popup
 3. `screenshot-options.png`: the options page
 
+**Promo tiles**, also in `chrome/test/out/`. Both are optional.
+
+- Small (440×280): `promo-small.png`, rendered from
+  [promo-small.html](promo-small.html). Listings without one are shown after
+  those with one.
+- Marquee (1400×560): `promo-marquee.png`, rendered from
+  [promo-marquee.html](promo-marquee.html). Needed only to be considered for
+  featuring at the top of the store.
+
 ## Privacy practices
 
 **Single purpose:** Reads text from web pages aloud with a text-to-speech

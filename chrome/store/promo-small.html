@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- Chrome Web Store small promo tile (440×280): lines of text, one sentence
+     in the reading highlight, and the icon's five bars. `npm run test:chrome`
+     renders it to chrome/test/out/promo-small.png. Uses the system font, so
+     render it on a Mac to match the uploaded tile. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kokoro Speak small promo tile</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 440px; height: 280px; overflow: hidden; background: #07266e; }
+    svg { display: block; }
+  </style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280" role="img" aria-label="Kokoro Speak">
+  <defs>
+    <radialGradient id="bg" cx="48%" cy="8%" r="92%">
+      <stop offset="0%" stop-color="#1a62d4"/>
+      <stop offset="58%" stop-color="#0c3d9e"/>
+      <stop offset="100%" stop-color="#07266e"/>
+    </radialGradient>
+    <filter id="goldGlow" x="-8%" y="-70%" width="116%" height="240%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+  <rect width="440" height="280" fill="url(#bg)"/>
+  <text x="32" y="46"
+        fill="#ffffff"
+        style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif;font-size:32px;font-weight:700;letter-spacing:-0.03em">Kokoro Speak</text>
+  <rect x="32" y="80" width="210" height="18" rx="9" fill="#ffffff" fill-opacity="0.44"/>
+  <rect x="32" y="112" width="268" height="18" rx="9" fill="#ffffff" fill-opacity="0.44"/>
+  <rect x="32" y="148" width="294" height="46" rx="13" fill="#ffc400" fill-opacity="0.5" filter="url(#goldGlow)"/>
+  <rect x="32" y="148" width="294" height="46" rx="13" fill="#ffc400"/>
+  <!-- The icon's bars (chrome/icons.mjs): heights 0.35, 0.7, 1, 0.7, 0.35 of 0.56. -->
+  <svg x="336" y="141" width="60" height="60" viewBox="0.22 0.22 0.56 0.56">
+    <rect x="0.22" y="0.402" width="0.062222" height="0.196" rx="0.031111" fill="#ffc400"/>
+    <rect x="0.344444" y="0.304" width="0.062222" height="0.392" rx="0.031111" fill="#ffc400"/>
+    <rect x="0.468888" y="0.22" width="0.062222" height="0.56" rx="0.031111" fill="#ffc400"/>
+    <rect x="0.593332" y="0.304" width="0.062222" height="0.392" rx="0.031111" fill="#ffc400"/>
+    <rect x="0.717776" y="0.402" width="0.062222" height="0.196" rx="0.031111" fill="#ffc400"/>
+  </svg>
+  <rect x="32" y="210" width="250" height="18" rx="9" fill="#ffffff" fill-opacity="0.44"/>
+  <rect x="32" y="242" width="176" height="18" rx="9" fill="#ffffff" fill-opacity="0.44"/>
+</svg>
+</body>
+</html>

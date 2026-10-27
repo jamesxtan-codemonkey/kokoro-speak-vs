@@ -1,7 +1,7 @@
 // End-to-end test of the built extension (chrome/dist-test) in Chrome for
 // Testing: speak a selection with highlighting, pause/resume/stop, read a page,
 // and the AI rewriting check against Anthropic. Also saves Chrome Web Store
-// screenshots to chrome/test/out/.
+// screenshots and promo tiles to chrome/test/out/.
 //
 //   npm run test:chrome                     (builds dist-test first)
 //   CHROME_PATH=/path/to/chrome npm run test:chrome
@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -278,6 +278,17 @@ try {
     await sleep(300);
     await page.screenshot({ path: join(OUT, "screenshot-popup.png") });
     await page.evaluate(() => document.getElementById("popup-shot").remove());
+  });
+
+  await check("store promo tiles fill 440×280 and 1400×560", async () => {
+    for (const [name, width, height] of [["promo-small", 440, 280], ["promo-marquee", 1400, 560]]) {
+      const tile = await ctx.newPage();
+      await tile.setViewportSize({ width, height });
+      await tile.goto(pathToFileURL(join(HERE, "..", "store", `${name}.html`)).href);
+      assert.deepEqual(await tile.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.scrollHeight]), [width, height], name);
+      await tile.screenshot({ path: join(OUT, `${name}.png`) });
+      await tile.close();
+    }
   });
 } finally {
   try {
