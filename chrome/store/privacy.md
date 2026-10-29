@@ -1,5 +1,9 @@
 # Kokoro Speak for Chrome: privacy policy
 
+Last updated October 29, 2026. Published at
+https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/privacy/ (from the
+`gh-pages` branch); keep the two in step.
+
 Kokoro Speak reads text aloud using a speech model that runs on your own
 computer. It has no servers, collects no analytics, and doesn't require an
 account.
@@ -30,3 +34,6 @@ chrome://extensions.
 
 Kokoro Speak doesn't sell or share data, and doesn't use it for advertising
 or anything other than reading text aloud.
+
+**Questions** about this policy: open an issue at
+https://github.com/jamesxtan-codemonkey/kokoro-speak-vs/issues.

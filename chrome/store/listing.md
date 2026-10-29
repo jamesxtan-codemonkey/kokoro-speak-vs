@@ -50,6 +50,16 @@ Copy these into the Developer Dashboard when uploading
   [promo-marquee.html](promo-marquee.html). Needed only to be considered for
   featuring at the top of the store.
 
+**Additional fields** (all optional). The site is the repository's `gh-pages`
+branch, served by GitHub Pages:
+
+- **Homepage URL:** https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/
+- **Support URL:** https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/support/
+- **Official URL:** the same site, verified as yours in Google Search Console
+  (URL-prefix property `https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/`,
+  by the `google-site-verification` meta tag in `index.html` on `gh-pages`).
+  Keep the tag: removing it unverifies the site.
+
 ## Privacy practices
 
 **Single purpose:** Reads text from web pages aloud with a text-to-speech
@@ -81,5 +91,6 @@ WebAssembly.)
 - No data is sold, used for advertising, or used for anything but reading
   the text aloud.
 
-**Privacy policy URL:** host [privacy.md](privacy.md) somewhere public and
-link it here.
+**Privacy policy URL:** https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/privacy/
+(the published copy of [privacy.md](privacy.md), on `gh-pages`: change both
+together).
