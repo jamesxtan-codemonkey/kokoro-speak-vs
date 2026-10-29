@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kokoro Speak privacy policy</title>
+  <meta name="description" content="Kokoro Speak runs on your own computer. It has no servers, collects no analytics, and doesn't require an account.">
+  <link rel="icon" href="../assets/icon-32.png">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <!-- Keep in step with chrome/store/privacy.md in the repository. -->
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="../"><img src="../assets/icon-128.png" alt="">Kokoro Speak</a>
+      <nav>
+        <a href="../support/">Support</a>
+        <a href="./">Privacy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero small">
+      <div class="wrap">
+        <h1>Privacy policy</h1>
+        <p class="lede">Kokoro Speak for Chrome</p>
+      </div>
+    </div>
+
+    <article class="prose">
+      <p class="updated">Last updated October 29, 2026</p>
+
+      <p>Kokoro Speak reads text aloud using a speech model that runs on your own computer. It has no servers, collects no analytics, and doesn't require an account.</p>
+
+      <p><strong>Text you have read aloud</strong> is processed on your device and isn't stored or sent anywhere, with one exception that you control: if you turn on <strong>AI rewriting</strong> in the options and enter your own Anthropic API key, the sentences that contain numbers or symbols are sent to Anthropic's API, as they're about to be read, so they can be rewritten to sound right ("$10B" as "10 billion dollars"). Anthropic handles that text under its own terms and <a href="https://www.anthropic.com/legal/privacy">privacy policy</a>. AI rewriting is off by default.</p>
+
+      <p><strong>Your settings</strong> (voice, speed, pronunciations) are saved with Chrome's extension storage. If you're signed in to Chrome with sync on, Chrome syncs them between your devices.</p>
+
+      <p><strong>Your API key</strong>, if you enter one, is stored only on this device, in the extension's local storage, and is sent only to api.anthropic.com.</p>
+
+      <p><strong>Page access.</strong> The extension reads a page only when you ask it to (the right-click menu, a keyboard shortcut or the toolbar popup), and only that page, to get the text to read and to highlight the sentence being spoken. If you select text inside a frame embedded from another site, the popup can ask Chrome for access to that one site, so it can read and highlight the text there; you can remove that access at any time in the extension's details in <code>chrome://extensions</code>.</p>
+
+      <p>Kokoro Speak doesn't sell or share data, and doesn't use it for advertising or anything other than reading text aloud.</p>
+
+      <p><strong>Questions</strong> about this policy: <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs/issues">open an issue on GitHub</a>.</p>
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <nav>
+        <a href="../support/">Support</a>
+        <a href="./">Privacy policy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">Source code</a>
+      </nav>
+      <span>MIT License. Speech by <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a> (Apache-2.0).</span>
+    </div>
+  </footer>
+</body>
+</html>

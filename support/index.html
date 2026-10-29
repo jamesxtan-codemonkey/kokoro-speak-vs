@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kokoro Speak support</title>
+  <meta name="description" content="Help with Kokoro Speak for Chrome, and where to report a problem.">
+  <link rel="icon" href="../assets/icon-32.png">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="../"><img src="../assets/icon-128.png" alt="">Kokoro Speak</a>
+      <nav>
+        <a href="./">Support</a>
+        <a href="../privacy/">Privacy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero small">
+      <div class="wrap">
+        <h1>Support</h1>
+        <p class="lede">Answers to common questions, and where to report a problem.</p>
+      </div>
+    </div>
+
+    <article class="prose">
+      <h2>Common questions</h2>
+
+      <details>
+        <summary>It says "Select some text on the page first."</summary>
+        <p>Speak selection reads the text you've highlighted with the mouse. Select a passage and try again, or use <strong>Read page</strong> to read the page's main article.</p>
+      </details>
+
+      <details>
+        <summary>The popup shows an "Allow reading …" button.</summary>
+        <p>Your selection is inside a frame embedded from another site (an artifact or embedded document, for example). The extension can only read that frame with your permission: click the button and Chrome asks you to allow that one site. You can remove the access later in the extension's details in <code>chrome://extensions</code>.</p>
+      </details>
+
+      <details>
+        <summary>It says "Chrome doesn't let extensions read this page."</summary>
+        <p>Chrome keeps extensions out of some pages, such as <code>chrome://</code> pages and the Chrome Web Store. Kokoro Speak works on ordinary web pages.</p>
+      </details>
+
+      <details>
+        <summary>A word or acronym is pronounced wrong.</summary>
+        <p>Open the extension's options. Under <strong>Pronunciation</strong>, add the word to <strong>Your pronunciations</strong> with how it should be said, or add an acronym to the list to spell out letter by letter (for example AWS, read as "A-W-S"). When writing letters yourself, join them with hyphens: "A-W-S", not "A W S".</p>
+      </details>
+
+      <details>
+        <summary>The first sentence takes a moment, or speech is slow.</summary>
+        <p>The speech model loads when you first read something, which takes a few seconds. After that, speech starts quickly. It runs on the graphics card when Chrome can use it, and otherwise on the processor, which is slower. You can choose under <strong>Run the model on</strong> in the options.</p>
+      </details>
+
+      <details>
+        <summary>A keyboard shortcut doesn't work.</summary>
+        <p>Another extension or app may be using it. Open <code>chrome://extensions/shortcuts</code> to see or change Kokoro Speak's shortcuts.</p>
+      </details>
+
+      <details>
+        <summary>How do I use AI rewriting?</summary>
+        <p>It's optional and off by default. In the options, under <strong>AI rewriting</strong>, enter your own Anthropic API key and click <strong>Test</strong> to check it. Then only sentences with numbers or symbols are sent to Anthropic to be rewritten for speech. See the <a href="../privacy/">privacy policy</a>.</p>
+      </details>
+
+      <h2>Report a problem</h2>
+      <p>Open an issue on <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs/issues">GitHub</a>. It helps to include:</p>
+      <ul>
+        <li>your Chrome version (from <code>chrome://version</code>) and operating system,</li>
+        <li>the page you were reading, if it's public,</li>
+        <li>what you did, what you expected, and what happened instead.</li>
+      </ul>
+      <p>Never include your API key in an issue.</p>
+    </article>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <nav>
+        <a href="./">Support</a>
+        <a href="../privacy/">Privacy policy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">Source code</a>
+      </nav>
+      <span>MIT License. Speech by <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a> (Apache-2.0).</span>
+    </div>
+  </footer>
+</body>
+</html>

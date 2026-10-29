@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kokoro Speak: read the web aloud, privately</title>
+  <meta name="description" content="A Chrome extension that reads web pages and selected text aloud in a natural voice, highlighting each sentence as it's spoken. Runs on your own computer: private, no account, works offline.">
+  <meta property="og:title" content="Kokoro Speak">
+  <meta property="og:description" content="Read web pages and selected text aloud in a natural voice, with each sentence highlighted. Private: runs on your device, offline.">
+  <meta property="og:image" content="https://jamesxtan-codemonkey.github.io/kokoro-speak-vs/assets/promo-marquee.png">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="assets/icon-32.png">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="assets/icon-128.png" alt="">Kokoro Speak</a>
+      <nav>
+        <a href="support/">Support</a>
+        <a href="privacy/">Privacy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div class="wrap">
+        <h1>Read the web aloud,<br><span class="mark">sentence by sentence.</span></h1>
+        <p class="lede">Kokoro Speak reads web pages and selected text in a natural, human-sounding voice, and highlights each sentence as it's spoken so you can follow along. It runs on your own computer: private, no account, and it works offline.</p>
+        <div class="actions">
+          <!-- Once the store listing is live, replace this with:
+               <a class="btn primary" href="https://chromewebstore.google.com/detail/ITEM_ID">Add to Chrome</a> -->
+          <span class="btn soon">Coming soon to the Chrome Web Store</span>
+          <a class="btn secondary" href="https://marketplace.visualstudio.com/items?itemName=JamesTan.kokoro-speak-vs">Also for VS Code</a>
+        </div>
+        <img class="shot" src="assets/screenshot-reading.png" width="1280" height="800" alt="An article in Chrome with the sentence being read aloud highlighted in yellow.">
+      </div>
+    </div>
+
+    <section>
+      <div class="wrap">
+        <h2>What it does</h2>
+        <p class="sub">Select some text and press <kbd>Alt+Shift+S</kbd>, or read a whole article with <kbd>Alt+Shift+R</kbd>.</p>
+        <div class="grid">
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>Selections or whole articles</h3>
+            <p>Speak what you've selected, or read a page's main article and skip the menus, sidebars and footers.</p>
+          </div>
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>Follow along</h3>
+            <p>The sentence being spoken is highlighted on the page and kept in view.</p>
+          </div>
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>28 voices</h3>
+            <p>American and British English, at any speed from 0.5× to 2×.</p>
+          </div>
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>Private and offline</h3>
+            <p>The Kokoro-82M speech model is included and runs on your graphics card, or on the processor when there isn't one. Nothing is sent to a server.</p>
+          </div>
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>Numbers read naturally</h3>
+            <p>"$10B" is read as "10 billion dollars" and "Q4 2025" as "fourth quarter 2025". Add your own pronunciations, and acronyms to spell out.</p>
+          </div>
+          <div class="card">
+            <span class="bars" aria-hidden="true"><i style="height:8px"></i><i style="height:15px"></i><i style="height:22px"></i><i style="height:15px"></i><i style="height:8px"></i></span>
+            <h3>Optional AI rewriting</h3>
+            <p>For text the built-in rules don't cover, with your own Anthropic API key. It's off by default, and it's the only feature that sends text off your device.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="alt">
+      <div class="wrap split">
+        <div>
+          <h2>Controls where you need them</h2>
+          <p class="sub">Use the toolbar button, the right-click menu or the keyboard. Change the shortcuts at <code>chrome://extensions/shortcuts</code>.</p>
+          <table>
+            <tr><td><kbd>Alt+Shift+S</kbd></td><td>Speak the selection</td></tr>
+            <tr><td><kbd>Alt+Shift+R</kbd></td><td>Read the page</td></tr>
+            <tr><td><kbd>Alt+Shift+P</kbd></td><td>Pause or resume</td></tr>
+            <tr><td><kbd>Alt+Shift+X</kbd></td><td>Stop</td></tr>
+          </table>
+          <p class="updated">On a Mac, Alt is the Option key (⌥).</p>
+        </div>
+        <img class="shot" src="assets/screenshot-popup.png" width="1280" height="800" alt="The Kokoro Speak popup with speak, read, pause and stop buttons, a voice menu and a speed slider.">
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <nav>
+        <a href="support/">Support</a>
+        <a href="privacy/">Privacy policy</a>
+        <a href="https://github.com/jamesxtan-codemonkey/kokoro-speak-vs">Source code</a>
+      </nav>
+      <span>MIT License. Speech by <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a> (Apache-2.0).</span>
+    </div>
+  </footer>
+</body>
+</html>
