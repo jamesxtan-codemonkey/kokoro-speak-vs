@@ -40,7 +40,7 @@ export interface NormalizeOptions {
   mode: NormMode;
   rules: string;
   replacements: Replacement[];
-  spellOut?: string[]; // acronyms to read letter-by-letter (API → A P I)
+  spellOut?: string[]; // acronyms to read letter-by-letter (API → A-P-I)
   backend: Backend;
   command: string; // explicit CLI for backend "cli"
   model: string; // for backend "api"

@@ -80,9 +80,17 @@ test("emphasis markers are silent (never read 'asterisk'), even off the Markdown
 test("spellOut: acronyms read letter-by-letter (whole words only)", () => {
   assert.equal(
     N.applySpellOut("the API and LFP program, not APItude", ["API", "LFP"]),
-    "the A P I and L F P program, not APItude"
+    "the A-P-I and L-F-P program, not APItude"
   );
   assert.equal(N.applySpellOut("plain text", []), "plain text");
+});
+
+test("spellOut: the phonemizer reads each letter as its name, A included", async () => {
+  const { phonemize } = await import("phonemizer");
+  const ipa = async (t) => (await phonemize(N.applySpellOut(t, ["AWS", "API"]), "en-us")).join(" ");
+  // "eɪ" is the letter A; spaced letters gave "ɐ" (the article "a").
+  assert.match(await ipa("We run on AWS today."), /ˈeɪdˈʌbəljˌuːˈɛs/);
+  assert.match(await ipa("the API key"), /ˈeɪpˈiː/);
 });
 
 test("gate: hasCandidates", () => {

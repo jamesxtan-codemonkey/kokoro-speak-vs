@@ -196,7 +196,7 @@ function spellOutPasses(list: string[] | undefined): Pass[] {
   return (list ?? [])
     .map((a) => a?.trim())
     .filter(Boolean)
-    .map((acr) => [new RegExp(`\\b${escapeRegExp(acr)}\\b`, "g"), acr.split("").join(" ")]);
+    .map((acr) => [new RegExp(`\\b${escapeRegExp(acr)}\\b`, "g"), acr.split("").join("-")]);
 }
 
 /** Apply user-defined literal/regex replacements. */
@@ -204,7 +204,9 @@ export function applyReplacements(text: string, reps: Replacement[]): string {
   return runPasses(text, replacementPasses(reps));
 }
 
-/** Spell listed acronyms letter-by-letter: "API" → "A P I" (whole words only). */
+/** Spell listed acronyms letter-by-letter: "API" → "A-P-I" (whole words only).
+ *  Hyphens, not spaces: the phonemizer reads a lone "A" as the article ("uh"),
+ *  but each letter of "A-W-S" as its name. */
 export function applySpellOut(text: string, list?: string[]): string {
   return runPasses(text, spellOutPasses(list));
 }
@@ -424,7 +426,7 @@ export const SEED_RULES = `- Currency: "$10B" → "10 billion dollars"; "$3.5M" 
 - Versions: "v1.2.3" → "version 1 point 2 point 3".
 - Quarters: "Q4 2025" → "fourth quarter 2025".
 - Abbreviations: "e.g." → "for example"; "i.e." → "that is"; "etc." → "etcetera".
-- Spell out initialism acronyms letter by letter (API → "A P I"; LFP → "L F P"), but keep pronounceable acronyms/names as words (NASA, OSCAR, JSON).
+- Spell out initialism acronyms letter by letter, joined by hyphens (API → "A-P-I"; AWS → "A-W-S"), but keep pronounceable acronyms/names as words (NASA, OSCAR, JSON).
 - Never read Markdown markers aloud: "**" and "*" emphasis are silent (keep the word).
 - Read check marks as "check": "✅" → "check". Read other emoji as a short word for what they mean, or drop them.
 - Read code identifiers naturally (split camelCase / snake_case into words).
